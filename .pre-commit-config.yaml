@@ -29,3 +29,9 @@ repos:
         files: '^go\.(mod|sum)$'
         pass_filenames: false
         entry: go mod tidy -v
+
+      - id: shellcheck
+        name: "Lint shell scripts"
+        language: system
+        types: [shell]
+        entry: shellcheck
