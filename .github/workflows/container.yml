@@ -1,0 +1,31 @@
+name: Container
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup ko
+        uses: ko-build/setup-ko@v0.9
+
+      - name: Build and push image
+        env:
+          KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
+        run: ko build --bare --tags latest ./cmd/go-openai-proxy

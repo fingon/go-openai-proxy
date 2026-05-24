@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -111,10 +110,7 @@ func (resolver *Resolver) CodexClientVersion(ctx context.Context) string {
 	}
 	resolver.versionMu.Unlock()
 
-	version := resolver.resolveLocalVersion(ctx)
-	if version == "" {
-		version = resolver.resolveRegistryVersion(ctx)
-	}
+	version := resolver.resolveRegistryVersion(ctx)
 	if version == "" {
 		version = config.FallbackCodexClientVersion
 		slog.Warn("could not determine Codex API version automatically", "fallback", version)
@@ -166,16 +162,6 @@ func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, e
 	}
 
 	return models, nil
-}
-
-func (resolver *Resolver) resolveLocalVersion(ctx context.Context) string {
-	command := exec.CommandContext(ctx, "codex", "--version")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return ""
-	}
-
-	return normalizeVersion(string(output))
 }
 
 func (resolver *Resolver) resolveRegistryVersion(ctx context.Context) string {

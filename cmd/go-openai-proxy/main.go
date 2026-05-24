@@ -19,15 +19,15 @@ import (
 )
 
 type cli struct {
-	BaseURL       string `help:"Override the upstream Codex base URL." name:"base-url"`
-	CodexVersion  string `help:"Codex API version to use for model discovery." name:"codex-version"`
-	Host          string `help:"Host interface to bind to." name:"host"`
-	Models        string `help:"Comma-separated model ids to expose from /v1/models." name:"models"`
-	OAuthClientID string `help:"Override the OAuth client id used for refresh." name:"oauth-client-id"`
-	OAuthFile     string `help:"Path to the local auth.json file." name:"oauth-file"`
-	OAuthTokenURL string `help:"Override the OAuth token URL used for refresh." name:"oauth-token-url"`
-	Port          int    `help:"Port to listen on." name:"port"`
-	Verbose       bool   `help:"Enable verbose logging." name:"v" short:"v"`
+	BaseURL       string `env:"GO_OPENAI_PROXY_BASE_URL" help:"Override the upstream Codex base URL." name:"base-url"`
+	CodexVersion  string `env:"GO_OPENAI_PROXY_CODEX_VERSION" help:"Codex API version to use for model discovery." name:"codex-version"`
+	Host          string `env:"GO_OPENAI_PROXY_HOST" help:"Host interface to bind to." name:"host"`
+	Models        string `env:"GO_OPENAI_PROXY_MODELS" help:"Comma-separated model ids to expose from /v1/models." name:"models"`
+	OAuthClientID string `env:"GO_OPENAI_PROXY_OAUTH_CLIENT_ID" help:"Override the OAuth client id used for refresh." name:"oauth-client-id"`
+	OAuthFile     string `env:"GO_OPENAI_PROXY_OAUTH_FILE" help:"Path to the local auth.json file." name:"oauth-file"`
+	OAuthTokenURL string `env:"GO_OPENAI_PROXY_OAUTH_TOKEN_URL" help:"Override the OAuth token URL used for refresh." name:"oauth-token-url"`
+	Port          int    `env:"GO_OPENAI_PROXY_PORT" help:"Port to listen on." name:"port"`
+	Verbose       bool   `env:"GO_OPENAI_PROXY_VERBOSE" help:"Enable verbose logging." name:"v" short:"v"`
 }
 
 func main() {
