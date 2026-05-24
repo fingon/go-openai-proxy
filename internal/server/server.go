@@ -20,6 +20,7 @@ import (
 
 const (
 	defaultChatModel = "gpt-5.2"
+	modelsPathPrefix = "/v1/models/"
 	proxyOwner       = "codex-oauth"
 )
 
@@ -65,14 +66,18 @@ type Handler struct {
 }
 
 func NewHandler(options Options) (*Handler, error) {
-	codexClient, err := codex.NewClient(codex.Options{
+	codexOptions := codex.Options{
 		AuthFilePath: options.AuthFilePath,
 		BaseURL:      options.BaseURL,
-		Client:       options.HTTPClient,
 		ClientID:     options.ClientID,
 		EnsureFresh:  true,
 		TokenURL:     options.TokenURL,
-	})
+	}
+	if options.HTTPClient != nil {
+		codexOptions.Client = options.HTTPClient
+	}
+
+	codexClient, err := codex.NewClient(codexOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -153,12 +158,12 @@ func (handler *Handler) ServeHTTP(responseWriter http.ResponseWriter, request *h
 		writeJSON(responseWriter, http.StatusOK, map[string]any{"ok": true, "replay_state": "stateless"})
 	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
 		handler.handleModels(responseWriter, request)
+	case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, modelsPathPrefix):
+		handler.handleModel(responseWriter, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/responses":
 		handler.handleResponses(responseWriter, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
 		handler.handleChatCompletions(responseWriter, request)
-	case strings.HasPrefix(request.URL.Path, "/v1/"):
-		handler.handlePassthrough(responseWriter, request)
 	default:
 		writeError(responseWriter, http.StatusNotFound, "Route not found.", "not_found_error")
 	}
@@ -173,18 +178,35 @@ func (handler *Handler) handleModels(responseWriter http.ResponseWriter, request
 
 	data := make([]map[string]any, 0, len(resolvedModels))
 	for _, model := range resolvedModels {
-		data = append(data, map[string]any{
-			"created":  0,
-			"id":       model,
-			"object":   "model",
-			"owned_by": proxyOwner,
-		})
+		data = append(data, modelObject(model))
 	}
 
 	writeJSON(responseWriter, http.StatusOK, map[string]any{
 		"data":   data,
 		"object": "list",
 	})
+}
+
+func (handler *Handler) handleModel(responseWriter http.ResponseWriter, request *http.Request) {
+	modelID := strings.TrimPrefix(request.URL.Path, modelsPathPrefix)
+	if modelID == "" || strings.Contains(modelID, "/") {
+		writeError(responseWriter, http.StatusNotFound, "Route not found.", "not_found_error")
+		return
+	}
+
+	resolvedModels, err := handler.models.Resolve(request.Context())
+	if err != nil {
+		writeError(responseWriter, http.StatusBadGateway, err.Error(), "upstream_error")
+		return
+	}
+	for _, model := range resolvedModels {
+		if model == modelID {
+			writeJSON(responseWriter, http.StatusOK, modelObject(model))
+			return
+		}
+	}
+
+	writeError(responseWriter, http.StatusNotFound, "Model not found.", "invalid_request_error")
 }
 
 func (handler *Handler) handleResponses(responseWriter http.ResponseWriter, request *http.Request) {
@@ -237,28 +259,6 @@ func (handler *Handler) handleResponses(responseWriter http.ResponseWriter, requ
 	writeJSON(responseWriter, http.StatusOK, completed)
 }
 
-func (handler *Handler) handlePassthrough(responseWriter http.ResponseWriter, request *http.Request) {
-	body, err := readRequestBody(request)
-	if err != nil {
-		writeError(responseWriter, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
-	}
-
-	targetPath := strings.TrimPrefix(request.URL.RequestURI(), "/v1")
-	if targetPath == "" {
-		targetPath = "/"
-	}
-
-	upstream, err := handler.codexClient.RawRequest(request.Context(), request.Method, targetPath, request.Header, body)
-	if err != nil {
-		writeError(responseWriter, http.StatusBadGateway, err.Error(), "upstream_error")
-		return
-	}
-	defer closeBody(upstream.Body, "upstream passthrough body")
-
-	copyUpstreamResponse(responseWriter, upstream)
-}
-
 func readRequestBody(request *http.Request) ([]byte, error) {
 	defer closeBody(request.Body, "request body")
 
@@ -268,6 +268,15 @@ func readRequestBody(request *http.Request) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+func modelObject(model string) map[string]any {
+	return map[string]any{
+		"created":  0,
+		"id":       model,
+		"object":   "model",
+		"owned_by": proxyOwner,
+	}
 }
 
 func writeJSON(responseWriter http.ResponseWriter, status int, body any) {

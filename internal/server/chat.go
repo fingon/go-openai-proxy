@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -302,6 +303,7 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 
 	events, err := sse.ReadAll(upstream.Body)
 	if err != nil {
+		slog.Error("read upstream chat stream failed", "error", err)
 		return
 	}
 	for _, event := range events {
@@ -312,6 +314,7 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 	}
 
 	if _, err := responseWriter.Write(sse.Done()); err != nil {
+		slog.Error("write chat stream done failed", "error", err)
 		return
 	}
 }
@@ -342,7 +345,9 @@ func chatChunksFromEvent(event sse.Event, id string, created int64, model string
 		if text != "" {
 			chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{"content": text}, nil))
 		}
-		chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{}, finishReason(response)))
+		if finish := finishReason(response); finish != nil {
+			chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{}, finish))
+		}
 	}
 
 	return chunks
@@ -361,9 +366,12 @@ func chatDeltaChunk(id string, created int64, model string, delta map[string]any
 func writeChatSSE(writer io.Writer, value any) {
 	encoded, err := sse.EncodeData(value)
 	if err != nil {
+		slog.Error("encode chat SSE failed", "error", err)
 		return
 	}
-	_, _ = writer.Write(encoded)
+	if _, err := writer.Write(encoded); err != nil {
+		slog.Error("write chat SSE failed", "error", err)
+	}
 }
 
 func extractText(response map[string]any) string {

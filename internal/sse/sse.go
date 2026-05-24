@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -41,6 +42,7 @@ func CollectCompletedResponse(reader io.Reader) (map[string]any, error) {
 
 	var latestResponse map[string]any
 	var latestError any
+	outputItems := make(map[int]any)
 	for _, event := range events {
 		if event.Data == "" {
 			continue
@@ -55,6 +57,12 @@ func CollectCompletedResponse(reader io.Reader) (map[string]any, error) {
 			continue
 		}
 
+		if item, ok := payload["item"]; ok && event.Event == "response.output_item.done" {
+			if outputIndex, ok := intValue(payload["output_index"]); ok {
+				outputItems[outputIndex] = item
+			}
+		}
+
 		response, ok := payload["response"].(map[string]any)
 		if ok {
 			latestResponse = response
@@ -62,6 +70,9 @@ func CollectCompletedResponse(reader io.Reader) (map[string]any, error) {
 	}
 
 	if latestResponse != nil {
+		if len(outputItems) > 0 && len(outputArray(latestResponse["output"])) == 0 {
+			latestResponse["output"] = orderedValues(outputItems)
+		}
 		return latestResponse, nil
 	}
 	if latestError != nil {
@@ -69,6 +80,41 @@ func CollectCompletedResponse(reader io.Reader) (map[string]any, error) {
 	}
 
 	return nil, errors.New("no completed response found in SSE stream")
+}
+
+func intValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed), true
+	case int:
+		return typed, true
+	default:
+		return 0, false
+	}
+}
+
+func outputArray(value any) []any {
+	output, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+
+	return output
+}
+
+func orderedValues(values map[int]any) []any {
+	keys := make([]int, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+
+	ordered := make([]any, 0, len(keys))
+	for _, key := range keys {
+		ordered = append(ordered, values[key])
+	}
+
+	return ordered
 }
 
 func EncodeData(value any) ([]byte, error) {

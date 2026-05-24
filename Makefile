@@ -22,6 +22,10 @@ lint:
 test:
 	go test ./...
 
+.PHONY: test-openai-endpoints
+test-openai-endpoints:
+	GO_OPENAI_PROXY_LIVE=1 go test ./internal/server -run TestLiveOpenAICompatibleEndpoints -count=1 -v
+
 .PHONY: build
 build:
 	go build ./...

@@ -45,6 +45,19 @@ func TestHealthAndModels(t *testing.T) {
 	assert.Assert(t, strings.Contains(modelsResponse.Body.String(), `"gpt-5.3-codex"`))
 }
 
+func TestModelRetrieve(t *testing.T) {
+	handler := testHandler(t, nil, []string{"gpt-5.2", "gpt-5.3-codex"})
+
+	found := httptest.NewRecorder()
+	handler.ServeHTTP(found, httptest.NewRequest(http.MethodGet, "/v1/models/gpt-5.3-codex", nil))
+	assert.Equal(t, found.Code, http.StatusOK)
+	assert.Assert(t, strings.Contains(found.Body.String(), `"id":"gpt-5.3-codex"`))
+
+	missing := httptest.NewRecorder()
+	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/v1/models/not-real", nil))
+	assert.Equal(t, missing.Code, http.StatusNotFound)
+}
+
 func TestResponsesAggregatesSSE(t *testing.T) {
 	transport := &recordingTransport{}
 	transport.handler = func(request *http.Request, body string) (*http.Response, error) {
@@ -55,8 +68,11 @@ func TestResponsesAggregatesSSE(t *testing.T) {
 			"event: response.created",
 			`data: {"response":{"id":"resp_1","status":"in_progress"}}`,
 			"",
+			"event: response.output_item.done",
+			`data: {"output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","content":[{"type":"output_text","text":"proxy-ok"}],"role":"assistant"}}`,
+			"",
 			"event: response.completed",
-			`data: {"response":{"id":"resp_1","status":"completed","output":[{"type":"message"}]}}`,
+			`data: {"response":{"id":"resp_1","status":"completed","output":[]}}`,
 			"",
 		}, "\n")), nil
 	}
@@ -69,6 +85,7 @@ func TestResponsesAggregatesSSE(t *testing.T) {
 
 	assert.Equal(t, response.Code, http.StatusOK)
 	assert.Assert(t, strings.Contains(response.Body.String(), `"id":"resp_1"`))
+	assert.Assert(t, strings.Contains(response.Body.String(), `"proxy-ok"`))
 }
 
 func TestRejectsStatelessReplay(t *testing.T) {
@@ -84,15 +101,32 @@ func TestRejectsStatelessReplay(t *testing.T) {
 	assert.Equal(t, len(transport.requests), 0)
 }
 
-func TestPassthroughStripsV1(t *testing.T) {
+func TestChatCompletionsAggregatesSSE(t *testing.T) {
 	transport := &recordingTransport{}
 	transport.handler = func(request *http.Request, _ string) (*http.Response, error) {
-		assert.Equal(t, request.URL.Path, "/backend-api/codex/embeddings")
-		assert.Equal(t, request.URL.RawQuery, "x=1")
-		assert.Equal(t, request.Header.Get("Authorization"), "Bearer access")
-		assert.Equal(t, request.Header.Get("chatgpt-account-id"), "acct-1")
-		return jsonResponse(http.StatusAccepted, map[string]any{"ok": true}), nil
+		assert.Equal(t, request.URL.Path, "/backend-api/codex/responses")
+		return textResponse(http.StatusOK, strings.Join([]string{
+			"event: response.output_item.done",
+			`data: {"output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","content":[{"type":"output_text","text":"proxy-ok"}],"role":"assistant"}}`,
+			"",
+			"event: response.completed",
+			`data: {"response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}}`,
+			"",
+		}, "\n")), nil
 	}
+	handler := testHandler(t, transport, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.2","messages":[{"role":"user","content":"say proxy-ok"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	assert.Equal(t, response.Code, http.StatusOK)
+	assert.Assert(t, strings.Contains(response.Body.String(), `"content":"proxy-ok"`))
+}
+
+func TestUnsupportedV1RouteDoesNotPassthrough(t *testing.T) {
+	transport := &recordingTransport{}
 	handler := testHandler(t, transport, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/embeddings?x=1", strings.NewReader(`{"model":"ignored"}`))
@@ -100,7 +134,8 @@ func TestPassthroughStripsV1(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
-	assert.Equal(t, response.Code, http.StatusAccepted)
+	assert.Equal(t, response.Code, http.StatusNotFound)
+	assert.Equal(t, len(transport.requests), 0)
 }
 
 func testHandler(t *testing.T, transport *recordingTransport, configuredModels []string) *Handler {

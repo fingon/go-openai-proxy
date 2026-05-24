@@ -74,10 +74,26 @@ The local target builds the image with `ko`, loads it into Podman, runs it with 
 
 ## Endpoints
 
-- `GET /health`
-- `GET /v1/models`
-- `POST /v1/responses`
-- `POST /v1/chat/completions`
-- Other `/v1/*` routes are forwarded to the Codex upstream with OAuth headers when the upstream accepts the same route shape.
+The proxy intentionally supports only routes that have been tested with Codex OAuth authentication. Unsupported `/v1/*` routes return a JSON `404` and are not forwarded to the Codex upstream.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `GET /health` | Supported | Local health check. |
+| `GET /v1/models` | Supported | Returns the Codex model catalog or the configured model allowlist. |
+| `GET /v1/models/{model}` | Supported | Local lookup against the same model list as `GET /v1/models`. |
+| `POST /v1/responses` | Supported | Stateless. Streaming and non-streaming calls are tested. |
+| `POST /v1/chat/completions` | Supported | Compatibility adapter backed by Codex Responses. Streaming and non-streaming calls are tested. |
+| `POST /v1/embeddings` | Unsupported | Tested with Codex OAuth and not accepted by the Codex upstream route shape. |
+| `POST /v1/completions` | Unsupported | Tested with Codex OAuth and not accepted by the Codex upstream route shape. |
+
+The Responses adapter always sends a streaming request to Codex and aggregates the SSE events for non-streaming callers. It sets `store=false` by default and rejects `previous_response_id` and `item_reference`, so clients must replay the full conversation history in `input` on each request. Response retrieval, input item listing, and other server-side replay state APIs are not supported.
+
+To run the live endpoint smoke test against your Codex auth cache:
+
+```bash
+CODEX_HOME="$PWD/codex" rtk make test-openai-endpoints
+```
+
+The live test copies `auth.json` into a temporary directory before starting the proxy, then verifies models, Responses, Chat Completions, and the unsupported Embeddings route. It does not print token material.
 
 This is unofficial software and is not affiliated with, endorsed by, or sponsored by OpenAI.
