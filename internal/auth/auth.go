@@ -1,0 +1,389 @@
+package auth
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/fingon/go-openai-proxy/internal/config"
+)
+
+const (
+	authFilename        = "auth.json"
+	oauthRefreshGrant   = "refresh_token"
+	oauthRefreshScope   = "openid profile email offline_access"
+	accountIDClaim      = "chatgpt_account_id"
+	openAIAuthClaimName = "https://api.openai.com/auth"
+)
+
+type HTTPClient interface {
+	Do(request *http.Request) (*http.Response, error)
+}
+
+type StoredTokens struct {
+	AccountID    string `json:"account_id,omitempty"`
+	AccessToken  string `json:"access_token,omitempty"`
+	IDToken      string `json:"id_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
+type File struct {
+	OpenAIAPIKey string       `json:"OPENAI_API_KEY,omitempty"`
+	LastRefresh  string       `json:"last_refresh,omitempty"`
+	Tokens       StoredTokens `json:"tokens,omitempty"`
+}
+
+type Effective struct {
+	AccountID    string
+	AccessToken  string
+	IDToken      string
+	LastRefresh  string
+	RefreshToken string
+	SourcePath   string
+}
+
+type Loader struct {
+	AuthFilePath string
+	Client       HTTPClient
+	ClientID     string
+	EnsureFresh  bool
+	Issuer       string
+	Now          func() time.Time
+	TokenURL     string
+}
+
+type refreshResponse struct {
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+func Candidates(authFilePath string) []string {
+	if authFilePath != "" {
+		return []string{authFilePath}
+	}
+
+	var candidates []string
+	for _, home := range []string{os.Getenv("CHATGPT_LOCAL_HOME"), os.Getenv("CODEX_HOME")} {
+		if home != "" {
+			candidates = append(candidates, filepath.Join(home, authFilename))
+		}
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(
+			candidates,
+			filepath.Join(home, ".chatgpt-local", authFilename),
+			filepath.Join(home, ".codex", authFilename),
+		)
+	}
+
+	return uniqueStrings(candidates)
+}
+
+func ExistingPath(authFilePath string) (string, error) {
+	for _, candidate := range Candidates(authFilePath) {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat auth file %q: %w", candidate, err)
+		}
+	}
+
+	return "", os.ErrNotExist
+}
+
+func ParseJWTClaims(token string) (map[string]any, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return nil, false
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, false
+	}
+
+	var claims map[string]any
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return nil, false
+	}
+
+	return claims, true
+}
+
+func DeriveAccountID(idToken string) string {
+	claims, ok := ParseJWTClaims(idToken)
+	if !ok {
+		return ""
+	}
+
+	authClaim, ok := claims[openAIAuthClaimName].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	accountID, ok := authClaim[accountIDClaim].(string)
+	if !ok {
+		return ""
+	}
+
+	return accountID
+}
+
+func (loader Loader) Load(ctx context.Context) (Effective, error) {
+	if loader.Client == nil {
+		loader.Client = http.DefaultClient
+	}
+	if loader.ClientID == "" {
+		loader.ClientID = config.DefaultOAuthClientID
+	}
+	if loader.Issuer == "" {
+		loader.Issuer = config.DefaultOAuthIssuer
+	}
+	if loader.Now == nil {
+		loader.Now = time.Now
+	}
+
+	authPath, authFile, err := loader.readAuthFile()
+	if err != nil {
+		return Effective{}, err
+	}
+
+	tokens := normalizeTokens(authFile.Tokens)
+	accountID := tokens.AccountID
+	if accountID == "" {
+		accountID = DeriveAccountID(tokens.IDToken)
+	}
+
+	needsRefresh := loader.EnsureFresh && tokens.RefreshToken != "" &&
+		shouldRefreshAccessToken(tokens.AccessToken, authFile.LastRefresh, loader.Now())
+	if needsRefresh {
+		updatedTokens, updatedAccountID, updatedLastRefresh, err := loader.refreshedAuthFile(ctx, tokens, authFile.LastRefresh, accountID)
+		if err != nil {
+			return Effective{}, err
+		}
+		if updatedTokens.AccessToken != "" {
+			tokens = updatedTokens
+			accountID = updatedAccountID
+			authFile.Tokens = updatedTokens
+			authFile.LastRefresh = updatedLastRefresh
+			if err := writeAuthFile(authPath, authFile); err != nil {
+				return Effective{}, err
+			}
+		}
+	}
+
+	if tokens.AccessToken == "" {
+		return Effective{}, errors.New("ChatGPT access token not found. Run `codex login` to create auth.json")
+	}
+	if accountID == "" {
+		return Effective{}, errors.New("ChatGPT account id not found in auth.json. Run `codex login` to create auth.json")
+	}
+
+	return Effective{
+		AccountID:    accountID,
+		AccessToken:  tokens.AccessToken,
+		IDToken:      tokens.IDToken,
+		LastRefresh:  authFile.LastRefresh,
+		RefreshToken: tokens.RefreshToken,
+		SourcePath:   authPath,
+	}, nil
+}
+
+func (loader Loader) refreshedAuthFile(ctx context.Context, tokens StoredTokens, lastRefresh, accountID string) (StoredTokens, string, string, error) {
+	refreshed, err := loader.refreshTokens(ctx, tokens.RefreshToken)
+	if err != nil {
+		return StoredTokens{}, "", "", err
+	}
+	if refreshed.AccessToken == "" {
+		return StoredTokens{}, "", lastRefresh, nil
+	}
+
+	tokens.AccessToken = refreshed.AccessToken
+	if refreshed.IDToken != "" {
+		tokens.IDToken = refreshed.IDToken
+	}
+	if refreshed.RefreshToken != "" {
+		tokens.RefreshToken = refreshed.RefreshToken
+	}
+	if refreshedAccountID := DeriveAccountID(tokens.IDToken); refreshedAccountID != "" {
+		accountID = refreshedAccountID
+	}
+	if accountID == "" {
+		accountID = tokens.AccountID
+	}
+	tokens.AccountID = accountID
+
+	return tokens, accountID, loader.Now().UTC().Format(time.RFC3339Nano), nil
+}
+
+func (loader Loader) readAuthFile() (string, File, error) {
+	path, err := ExistingPath(loader.AuthFilePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", File{}, missingAuthError(loader.AuthFilePath)
+		}
+
+		return "", File{}, err
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", File{}, fmt.Errorf("read auth file %q: %w", path, err)
+	}
+
+	var authFile File
+	if err := json.Unmarshal(content, &authFile); err != nil {
+		return "", File{}, fmt.Errorf("parse auth file %q: %w", path, err)
+	}
+
+	return path, authFile, nil
+}
+
+func missingAuthError(authFilePath string) error {
+	if authFilePath != "" {
+		return fmt.Errorf("no auth file was found at %s. Run `codex login` and try again", authFilePath)
+	}
+
+	return fmt.Errorf("no auth file was found in the default search paths: %s. Run `codex login` and try again", strings.Join(Candidates(""), ", "))
+}
+
+func (loader Loader) refreshTokens(ctx context.Context, refreshToken string) (refreshResponse, error) {
+	tokenURL := loader.TokenURL
+	if tokenURL == "" {
+		tokenURL = strings.TrimRight(loader.Issuer, "/") + "/oauth/token"
+	}
+
+	body, err := json.Marshal(map[string]string{
+		"client_id":     loader.ClientID,
+		"grant_type":    oauthRefreshGrant,
+		"refresh_token": refreshToken,
+		"scope":         oauthRefreshScope,
+	})
+	if err != nil {
+		return refreshResponse{}, fmt.Errorf("marshal token refresh body: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(body))
+	if err != nil {
+		return refreshResponse{}, fmt.Errorf("create token refresh request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := loader.Client.Do(request)
+	if err != nil {
+		return refreshResponse{}, fmt.Errorf("refresh ChatGPT tokens: %w", err)
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			slog.Warn("close token refresh response body failed", "error", err)
+		}
+	}()
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return refreshResponse{}, fmt.Errorf("read token refresh response: %w", err)
+	}
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return refreshResponse{}, fmt.Errorf("refresh ChatGPT tokens: upstream returned %s", response.Status)
+	}
+
+	var parsed refreshResponse
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return refreshResponse{}, fmt.Errorf("parse token refresh response: %w", err)
+	}
+	if parsed.RefreshToken == "" {
+		parsed.RefreshToken = refreshToken
+	}
+
+	return parsed, nil
+}
+
+func shouldRefreshAccessToken(accessToken, lastRefresh string, now time.Time) bool {
+	if accessToken == "" {
+		return true
+	}
+
+	claims, ok := ParseJWTClaims(accessToken)
+	if ok {
+		if expiry, ok := claims["exp"].(float64); ok {
+			expiryTime := time.Unix(int64(expiry), 0)
+			if !expiryTime.After(now.Add(config.RefreshExpiryMarginSeconds * time.Second)) {
+				return true
+			}
+		}
+	}
+
+	if lastRefresh == "" {
+		return false
+	}
+
+	refreshedAt, err := time.Parse(time.RFC3339Nano, lastRefresh)
+	if err != nil {
+		refreshedAt, err = time.Parse(time.RFC3339, lastRefresh)
+	}
+	if err != nil {
+		return false
+	}
+
+	return !refreshedAt.After(now.Add(-config.RefreshIntervalSeconds * time.Second))
+}
+
+func normalizeTokens(tokens StoredTokens) StoredTokens {
+	return StoredTokens{
+		AccountID:    strings.TrimSpace(tokens.AccountID),
+		AccessToken:  strings.TrimSpace(tokens.AccessToken),
+		IDToken:      strings.TrimSpace(tokens.IDToken),
+		RefreshToken: strings.TrimSpace(tokens.RefreshToken),
+	}
+}
+
+func writeAuthFile(path string, authFile File) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir auth directory %q: %w", filepath.Dir(path), err)
+	}
+
+	content, err := json.MarshalIndent(authFile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal auth file: %w", err)
+	}
+	content = append(content, '\n')
+
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		return fmt.Errorf("write auth file %q: %w", path, err)
+	}
+
+	return nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+
+	return result
+}

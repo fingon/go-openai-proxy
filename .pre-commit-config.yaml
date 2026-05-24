@@ -1,0 +1,31 @@
+repos:
+  - repo: builtin
+    hooks:
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+      - id: check-useless-excludes
+
+  - repo: local
+    hooks:
+      - id: fmt-golangci-lint
+        name: "Lint and format Go code"
+        language: system
+        files: \.go$
+        entry: go tool golangci-lint run --fix
+        pass_filenames: false
+
+      - id: go-mod-tidy
+        name: "Run go mod tidy"
+        language: system
+        files: '^go\.(mod|sum)$'
+        pass_filenames: false
+        entry: go mod tidy -v
