@@ -51,6 +51,8 @@ test -f "codex/auth.json"
 
 Treat `auth.json` as secret material. Do not commit it, paste it into logs, or share one writable auth file across multiple running proxy instances. The proxy refreshes OAuth tokens when needed and writes the updated token state back to `auth.json`, so mount the directory read-write.
 
+The image runs as container UID/GID `0:0` by default. On rootless Linux Podman, container root maps back to the rootless host user, which allows the proxy to refresh a bind-mounted `auth.json` owned by your host user with mode `0600`.
+
 ```bash
 podman run --rm \
   --publish 127.0.0.1:17132:17132 \
@@ -59,6 +61,8 @@ podman run --rm \
   --volume "$PWD/codex:/codex" \
   ghcr.io/fingon/go-openai-proxy:latest
 ```
+
+On SELinux-enforcing hosts, add a private label to the bind mount, for example `--volume "$PWD/codex:/codex:Z"`.
 
 For local smoke testing, install `ko`, `podman`, and `curl`, make sure the Podman machine or socket is running, and make sure `$HOME/.codex/auth.json` exists. If your auth directory is elsewhere, set `CODEX_HOME` for the Make target.
 

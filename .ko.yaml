@@ -1,0 +1,6 @@
+defaultPlatforms:
+- linux/arm64
+- linux/amd64
+
+# :nonroot is default
+defaultBaseImage: gcr.io/distroless/static:latest
