@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,6 +49,23 @@ func TestLoadReturnsStoredTokens(t *testing.T) {
 	assert.Equal(t, effective.AccessToken, "access")
 	assert.Equal(t, effective.AccountID, "acct-1")
 	assert.Equal(t, effective.SourcePath, authPath)
+}
+
+func TestWritablePathReturnsExistingWritablePath(t *testing.T) {
+	authPath := writeTestAuthFile(t, File{Tokens: StoredTokens{
+		AccountID:   "acct-1",
+		AccessToken: "access",
+	}})
+
+	path, err := WritablePath(authPath)
+	assert.NilError(t, err)
+	assert.Equal(t, path, authPath)
+}
+
+func TestWritablePathRejectsMissingFile(t *testing.T) {
+	_, err := WritablePath(filepath.Join(t.TempDir(), "missing.json"))
+
+	assert.Assert(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestLoadRefreshesExpiredToken(t *testing.T) {

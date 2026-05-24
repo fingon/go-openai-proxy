@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fingon/go-openai-proxy/internal/auth"
 	"github.com/fingon/go-openai-proxy/internal/config"
@@ -168,21 +169,19 @@ func (client *Client) do(ctx context.Context, method string, targetURL *url.URL,
 
 func (client *Client) ensureAuth(ctx context.Context) (auth.Effective, error) {
 	client.mu.Lock()
-	if client.current.AccessToken != "" && client.current.AccountID != "" {
+	defer client.mu.Unlock()
+
+	if client.current.AccessToken != "" && client.current.AccountID != "" && !client.current.ShouldRefresh(time.Now()) {
 		current := client.current
-		client.mu.Unlock()
 		return current, nil
 	}
-	client.mu.Unlock()
 
 	effectiveAuth, err := client.authLoader.Load(ctx)
 	if err != nil {
 		return auth.Effective{}, err
 	}
 
-	client.mu.Lock()
 	client.current = effectiveAuth
-	client.mu.Unlock()
 
 	return effectiveAuth, nil
 }

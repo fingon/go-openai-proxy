@@ -49,14 +49,16 @@ func run() int {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
 
-	if _, err := auth.ExistingPath(commandLine.OAuthFile); err != nil {
+	authFilePath, err := auth.WritablePath(commandLine.OAuthFile)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.Error("auth file not found", "oauth_file", commandLine.OAuthFile, "candidates", strings.Join(auth.Candidates(commandLine.OAuthFile), ","))
 			return 1
 		}
-		slog.Error("check auth file failed", "error", err)
+		slog.Error("check writable auth file failed", "error", err)
 		return 1
 	}
+	commandLine.OAuthFile = authFilePath
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

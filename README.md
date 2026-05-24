@@ -34,12 +34,29 @@ codex login
 
 The container is built with `ko` and still expects a mounted Codex auth directory. Tokens are not supplied directly through environment variables.
 
+To provision `auth.json` without installing Codex locally, use Podman to run the Codex CLI against a mounted `.codex` directory:
+
+```bash
+mkdir -p "codex"
+podman run --rm -it \
+  --userns keep-id \
+  --env CODEX_HOME=/codex \
+  --env HOME=/tmp \
+  --env npm_config_cache=/tmp/.npm \
+  --volume "$PWD/codex:/codex" \
+  docker.io/library/node:lts-bookworm \
+  sh -lc 'printf "%s\n" "cli_auth_credentials_store = \"file\"" > /codex/config.toml && npm exec -y --package @openai/codex -- codex login --device-auth'
+test -f "codex/auth.json"
+```
+
+Treat `auth.json` as secret material. Do not commit it, paste it into logs, or share one writable auth file across multiple running proxy instances. The proxy refreshes OAuth tokens when needed and writes the updated token state back to `auth.json`, so mount the directory read-write.
+
 ```bash
 podman run --rm \
   --publish 127.0.0.1:17132:17132 \
   --env CODEX_HOME=/codex \
   --env GO_OPENAI_PROXY_HOST=0.0.0.0 \
-  --volume "$HOME/.codex:/codex" \
+  --volume "$PWD/codex:/codex" \
   ghcr.io/fingon/go-openai-proxy:latest
 ```
 

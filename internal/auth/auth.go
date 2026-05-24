@@ -105,6 +105,23 @@ func ExistingPath(authFilePath string) (string, error) {
 	return "", os.ErrNotExist
 }
 
+func WritablePath(authFilePath string) (string, error) {
+	path, err := ExistingPath(authFilePath)
+	if err != nil {
+		return "", err
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return "", fmt.Errorf("open auth file for writing %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close writable auth file %q: %w", path, err)
+	}
+
+	return path, nil
+}
+
 func ParseJWTClaims(token string) (map[string]any, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[1] == "" {
@@ -141,6 +158,10 @@ func DeriveAccountID(idToken string) string {
 	}
 
 	return accountID
+}
+
+func (effective Effective) ShouldRefresh(now time.Time) bool {
+	return effective.RefreshToken != "" && shouldRefreshAccessToken(effective.AccessToken, effective.LastRefresh, now)
 }
 
 func (loader Loader) Load(ctx context.Context) (Effective, error) {
