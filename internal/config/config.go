@@ -7,6 +7,7 @@ const (
 	DefaultOAuthClientID              = "app_EMoamEEZ73f0CkXaXp7hrann"
 	DefaultOAuthIssuer                = "https://auth.openai.com"
 	DefaultOAuthTokenURL              = "https://auth.openai.com/oauth/token"
+	DefaultExcludedModel              = "codex-auto-review"
 	OpenAIBetaResponsesHeader         = "responses=experimental"
 	CodexModelCacheTTLSeconds         = 300
 	CodexVersionCacheTTLSeconds       = 3600

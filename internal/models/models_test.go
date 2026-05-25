@@ -26,6 +26,22 @@ func TestCodexClientVersionUsesConfiguredVersion(t *testing.T) {
 	assert.Equal(t, version, "1.2.3")
 }
 
+func TestResolveExcludesConfiguredModels(t *testing.T) {
+	const (
+		excludedAutoReviewModel = "codex-auto-review"
+		excludedGPTModel        = "gpt-5.2"
+		includedModel           = "gpt-5.3-codex"
+	)
+	resolver := NewResolver(nil, Options{
+		ExcludedModels: []string{excludedAutoReviewModel, excludedGPTModel},
+		Models:         []string{excludedGPTModel, excludedAutoReviewModel, includedModel, includedModel},
+	})
+
+	resolved, err := resolver.Resolve(context.Background())
+	assert.NilError(t, err)
+	assert.DeepEqual(t, resolved, []string{includedModel})
+}
+
 func TestCodexClientVersionUsesInstalledCLI(t *testing.T) {
 	dir := t.TempDir()
 	writeCodexScript(t, dir, "codex-cli 3.4.5\n", 0)

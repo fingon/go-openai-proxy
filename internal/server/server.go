@@ -42,16 +42,18 @@ var (
 )
 
 type Options struct {
-	AuthFilePath string
-	BaseURL      string
-	ClientID     string
-	CodexVersion string
-	Host         string
-	HTTPClient   *http.Client
-	Models       []string
-	NoRefresh    bool
-	Port         int
-	TokenURL     string
+	AuthFilePath   string       `env:"GO_OPENAI_PROXY_OAUTH_FILE" help:"Path to the local auth.json file." name:"oauth-file"`
+	BaseURL        string       `env:"GO_OPENAI_PROXY_BASE_URL" help:"Override the upstream Codex base URL." name:"base-url"`
+	ClientID       string       `env:"GO_OPENAI_PROXY_OAUTH_CLIENT_ID" help:"Override the OAuth client id used for refresh." name:"oauth-client-id"`
+	CodexVersion   string       `env:"GO_OPENAI_PROXY_CODEX_VERSION" help:"Codex API version to use for model discovery." name:"codex-version"`
+	ExcludedModels []string     `default:"codex-auto-review" env:"GO_OPENAI_PROXY_EXCLUDE_MODELS" help:"Comma-separated model ids to exclude from /v1/models." name:"exclude-models" sep:","`
+	Host           string       `env:"GO_OPENAI_PROXY_HOST" help:"Host interface to bind to." name:"host"`
+	HTTPClient     *http.Client `kong:"-"`
+	Models         []string     `env:"GO_OPENAI_PROXY_MODELS" help:"Comma-separated model ids to expose from /v1/models." name:"models" sep:","`
+	NoRefresh      bool         `env:"GO_OPENAI_PROXY_NO_REFRESH" help:"Reload auth.json on 401, but do not call the OAuth refresh endpoint." name:"no-refresh"`
+	Port           int          `env:"GO_OPENAI_PROXY_PORT" help:"Port to listen on." name:"port"`
+	TokenURL       string       `env:"GO_OPENAI_PROXY_OAUTH_TOKEN_URL" help:"Override the OAuth token URL used for refresh." name:"oauth-token-url"`
+	Verbose        bool         `env:"GO_OPENAI_PROXY_VERBOSE" help:"Enable verbose logging." name:"v" short:"v"`
 }
 
 type Running struct {
@@ -87,9 +89,10 @@ func NewHandler(options Options) (*Handler, error) {
 	return &Handler{
 		codexClient: codexClient,
 		models: models.NewResolver(codexClient, models.Options{
-			CodexVersion: options.CodexVersion,
-			HTTPClient:   options.HTTPClient,
-			Models:       options.Models,
+			CodexVersion:   options.CodexVersion,
+			ExcludedModels: options.ExcludedModels,
+			HTTPClient:     options.HTTPClient,
+			Models:         options.Models,
 		}),
 	}, nil
 }

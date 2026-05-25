@@ -29,6 +29,7 @@ type Resolver struct {
 	client             *codex.Client
 	codexVersion       string
 	configuredModels   []string
+	excludedModels     []string
 	httpClient         *http.Client
 	modelsCache        []string
 	modelsCacheExpiry  time.Time
@@ -39,9 +40,10 @@ type Resolver struct {
 }
 
 type Options struct {
-	CodexVersion string
-	HTTPClient   *http.Client
-	Models       []string
+	CodexVersion   string
+	ExcludedModels []string
+	HTTPClient     *http.Client
+	Models         []string
 }
 
 type catalogResponse struct {
@@ -68,13 +70,14 @@ func NewResolver(client *codex.Client, options Options) *Resolver {
 		client:           client,
 		codexVersion:     strings.TrimSpace(options.CodexVersion),
 		configuredModels: uniqueStrings(options.Models),
+		excludedModels:   uniqueStrings(options.ExcludedModels),
 		httpClient:       httpClient,
 	}
 }
 
 func (resolver *Resolver) Resolve(ctx context.Context) ([]string, error) {
 	if len(resolver.configuredModels) > 0 {
-		return append([]string(nil), resolver.configuredModels...), nil
+		return excludeStrings(resolver.configuredModels, resolver.excludedModels), nil
 	}
 
 	resolver.modelsMu.Lock()
@@ -170,7 +173,7 @@ func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, e
 		return nil, errors.New("codex returned an empty models list")
 	}
 
-	return models, nil
+	return excludeStrings(models, resolver.excludedModels), nil
 }
 
 func (resolver *Resolver) resolveInstalledCodexVersion(ctx context.Context) (string, error) {
@@ -260,6 +263,27 @@ func uniqueStrings(values []string) []string {
 			continue
 		}
 		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+
+	return result
+}
+
+func excludeStrings(values, excluded []string) []string {
+	if len(excluded) == 0 {
+		return append([]string(nil), values...)
+	}
+
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, value := range excluded {
+		excludedSet[value] = struct{}{}
+	}
+
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := excludedSet[value]; ok {
+			continue
+		}
 		result = append(result, value)
 	}
 

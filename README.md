@@ -23,6 +23,7 @@ codex login
 | Host binding | `--host` | `GO_OPENAI_PROXY_HOST` | `127.0.0.1` |
 | Port | `--port` | `GO_OPENAI_PROXY_PORT` | `17132` |
 | Model allowlist | `--models` | `GO_OPENAI_PROXY_MODELS` | Account-specific Codex models |
+| Model exclusions | `--exclude-models` | `GO_OPENAI_PROXY_EXCLUDE_MODELS` | `codex-auto-review` |
 | Codex API version | `--codex-version` | `GO_OPENAI_PROXY_CODEX_VERSION` | Installed `codex --version`, then registry latest |
 | Upstream base URL | `--base-url` | `GO_OPENAI_PROXY_BASE_URL` | `https://chatgpt.com/backend-api/codex` |
 | OAuth client id | `--oauth-client-id` | `GO_OPENAI_PROXY_OAUTH_CLIENT_ID` | `app_EMoamEEZ73f0CkXaXp7hrann` |
