@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -84,6 +85,10 @@ func TestLoadRefreshesExpiredToken(t *testing.T) {
 
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		assert.Equal(t, request.URL.String(), "https://auth.example.test/token")
+		body, err := io.ReadAll(request.Body)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(string(body), `"grant_type":"refresh_token"`))
+		assert.Assert(t, !strings.Contains(string(body), `"scope"`))
 		return &http.Response{
 			Body:       ioNopCloser(`{"access_token":"new-access","id_token":` + quote(refreshedIDToken) + `,"refresh_token":"new-refresh"}`),
 			Header:     make(http.Header),
@@ -106,6 +111,79 @@ func TestLoadRefreshesExpiredToken(t *testing.T) {
 	content, err := os.ReadFile(authPath)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(content), `"access_token": "new-access"`))
+}
+
+func TestShouldRefreshAccessTokenUsesCodexTiming(t *testing.T) {
+	now := time.Date(2025, 1, 9, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name        string
+		accessToken string
+		lastRefresh string
+		want        bool
+	}{
+		{
+			name:        "expired jwt refreshes",
+			accessToken: testJWT(map[string]any{"exp": now.Add(-time.Second).Unix()}),
+			want:        true,
+		},
+		{
+			name:        "jwt within old margin does not refresh",
+			accessToken: testJWT(map[string]any{"exp": now.Add(time.Minute).Unix()}),
+			lastRefresh: now.Add(-time.Hour).Format(time.RFC3339),
+			want:        false,
+		},
+		{
+			name:        "old last refresh refreshes without jwt expiry",
+			accessToken: "not-a-jwt",
+			lastRefresh: now.AddDate(0, 0, -9).Format(time.RFC3339),
+			want:        true,
+		},
+		{
+			name:        "recent last refresh does not refresh without jwt expiry",
+			accessToken: "not-a-jwt",
+			lastRefresh: now.AddDate(0, 0, -7).Format(time.RFC3339),
+			want:        false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, shouldRefreshAccessToken(testCase.accessToken, testCase.lastRefresh, now), testCase.want)
+		})
+	}
+}
+
+func TestRefreshTokenFailureMessages(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "expired",
+			body: `{"error":{"code":"refresh_token_expired"}}`,
+			want: "refresh token has expired",
+		},
+		{
+			name: "reused",
+			body: `{"error":"refresh_token_reused"}`,
+			want: "refresh token was already used",
+		},
+		{
+			name: "invalidated",
+			body: `{"code":"refresh_token_invalidated"}`,
+			want: "refresh token was revoked",
+		},
+		{
+			name: "unknown",
+			body: `{}`,
+			want: "your access token could not be refreshed",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := refreshError(http.StatusUnauthorized, "401 Unauthorized", []byte(testCase.body))
+			assert.Assert(t, strings.Contains(err.Error(), testCase.want))
+		})
+	}
 }
 
 func testJWT(payload map[string]any) string {

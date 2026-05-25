@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,6 +37,7 @@ type Options struct {
 	ClientID     string
 	EnsureFresh  bool
 	Issuer       string
+	NoRefresh    bool
 	TokenURL     string
 }
 
@@ -64,6 +67,7 @@ func NewClient(options Options) (*Client, error) {
 			ClientID:     options.ClientID,
 			EnsureFresh:  options.EnsureFresh,
 			Issuer:       options.Issuer,
+			NoRefresh:    options.NoRefresh,
 			TokenURL:     options.TokenURL,
 		},
 		baseURL:    parsedBaseURL,
@@ -163,8 +167,38 @@ func (client *Client) do(ctx context.Context, method string, targetURL *url.URL,
 	if err != nil {
 		return nil, fmt.Errorf("call Codex upstream %s: %w", targetURL.String(), err)
 	}
+	if response.StatusCode != http.StatusUnauthorized {
+		return response, nil
+	}
 
-	return response, nil
+	retryAuth, retry, err := client.recoverAfterUnauthorized(ctx, effectiveAuth)
+	if err != nil {
+		closeBody(response.Body, "unauthorized upstream response body")
+		return nil, err
+	}
+	if !retry {
+		return response, nil
+	}
+	closeBody(response.Body, "unauthorized upstream response body")
+
+	retryRequest, err := http.NewRequestWithContext(ctx, method, targetURL.String(), readerForBody(body))
+	if err != nil {
+		return nil, fmt.Errorf("create upstream retry request: %w", err)
+	}
+	copyHeaders(retryRequest.Header, header)
+	retryRequest.Header.Del("Authorization")
+	retryRequest.Header.Del("Chatgpt-Account-Id")
+	retryRequest.Header.Del("Openai-Beta")
+	retryRequest.Header.Set("Authorization", "Bearer "+retryAuth.AccessToken)
+	retryRequest.Header.Set("chatgpt-account-id", retryAuth.AccountID)
+	retryRequest.Header.Set("OpenAI-Beta", config.OpenAIBetaResponsesHeader)
+
+	retryResponse, err := client.httpClient.Do(retryRequest)
+	if err != nil {
+		return nil, fmt.Errorf("retry Codex upstream %s after auth recovery: %w", targetURL.String(), err)
+	}
+
+	return retryResponse, nil
 }
 
 func (client *Client) ensureAuth(ctx context.Context) (auth.Effective, error) {
@@ -184,6 +218,44 @@ func (client *Client) ensureAuth(ctx context.Context) (auth.Effective, error) {
 	client.current = effectiveAuth
 
 	return effectiveAuth, nil
+}
+
+func (client *Client) recoverAfterUnauthorized(ctx context.Context, failedAuth auth.Effective) (auth.Effective, bool, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	reloadedAuth, err := client.authLoader.LoadStored(ctx)
+	if err != nil {
+		return auth.Effective{}, false, err
+	}
+	if reloadedAuth.AccountID != failedAuth.AccountID {
+		return auth.Effective{}, false, nil
+	}
+	if !authsEqualForRefresh(failedAuth, reloadedAuth) {
+		client.current = reloadedAuth
+		return reloadedAuth, true, nil
+	}
+	if client.authLoader.NoRefresh {
+		return auth.Effective{}, false, nil
+	}
+
+	refreshedAuth, err := client.authLoader.Refresh(ctx)
+	if err != nil {
+		return auth.Effective{}, false, err
+	}
+	if refreshedAuth.AccountID != failedAuth.AccountID {
+		return auth.Effective{}, false, errors.New("ChatGPT token refresh returned a different account; please sign in again")
+	}
+	client.current = refreshedAuth
+
+	return refreshedAuth, true, nil
+}
+
+func authsEqualForRefresh(left, right auth.Effective) bool {
+	return left.AccountID == right.AccountID &&
+		left.AccessToken == right.AccessToken &&
+		left.IDToken == right.IDToken &&
+		left.RefreshToken == right.RefreshToken
 }
 
 type NormalizeOptions struct {
@@ -249,5 +321,21 @@ func copyHeaders(dst, src http.Header) {
 		for _, value := range values {
 			dst.Add(key, value)
 		}
+	}
+}
+
+func readerForBody(body []byte) io.Reader {
+	if body == nil {
+		return nil
+	}
+	return bytes.NewReader(body)
+}
+
+func closeBody(body io.Closer, context string) {
+	if body == nil {
+		return
+	}
+	if err := body.Close(); err != nil {
+		slog.Warn("close body failed", "context", context, "error", err)
 	}
 }

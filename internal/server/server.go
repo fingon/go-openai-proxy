@@ -49,6 +49,7 @@ type Options struct {
 	Host         string
 	HTTPClient   *http.Client
 	Models       []string
+	NoRefresh    bool
 	Port         int
 	TokenURL     string
 }
@@ -71,6 +72,7 @@ func NewHandler(options Options) (*Handler, error) {
 		BaseURL:      options.BaseURL,
 		ClientID:     options.ClientID,
 		EnsureFresh:  true,
+		NoRefresh:    options.NoRefresh,
 		TokenURL:     options.TokenURL,
 	}
 	if options.HTTPClient != nil {

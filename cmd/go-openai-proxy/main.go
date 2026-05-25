@@ -23,6 +23,7 @@ type cli struct {
 	CodexVersion  string `env:"GO_OPENAI_PROXY_CODEX_VERSION" help:"Codex API version to use for model discovery." name:"codex-version"`
 	Host          string `env:"GO_OPENAI_PROXY_HOST" help:"Host interface to bind to." name:"host"`
 	Models        string `env:"GO_OPENAI_PROXY_MODELS" help:"Comma-separated model ids to expose from /v1/models." name:"models"`
+	NoRefresh     bool   `env:"GO_OPENAI_PROXY_NO_REFRESH" help:"Reload auth.json on 401, but do not call the OAuth refresh endpoint." name:"no-refresh"`
 	OAuthClientID string `env:"GO_OPENAI_PROXY_OAUTH_CLIENT_ID" help:"Override the OAuth client id used for refresh." name:"oauth-client-id"`
 	OAuthFile     string `env:"GO_OPENAI_PROXY_OAUTH_FILE" help:"Path to the local auth.json file." name:"oauth-file"`
 	OAuthTokenURL string `env:"GO_OPENAI_PROXY_OAUTH_TOKEN_URL" help:"Override the OAuth token URL used for refresh." name:"oauth-token-url"`
@@ -77,6 +78,7 @@ func run() int {
 		Host:         commandLine.Host,
 		HTTPClient:   http.DefaultClient,
 		Models:       parseModels(commandLine.Models),
+		NoRefresh:    commandLine.NoRefresh,
 		Port:         commandLine.Port,
 		TokenURL:     commandLine.OAuthTokenURL,
 	})
@@ -100,6 +102,7 @@ func startupModels(ctx context.Context, commandLine cli) ([]string, error) {
 		Client:       http.DefaultClient,
 		ClientID:     commandLine.OAuthClientID,
 		EnsureFresh:  true,
+		NoRefresh:    commandLine.NoRefresh,
 		TokenURL:     commandLine.OAuthTokenURL,
 	})
 	if err != nil {

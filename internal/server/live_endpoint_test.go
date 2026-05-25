@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,13 +30,14 @@ func TestLiveOpenAICompatibleEndpoints(t *testing.T) {
 		t.Skip(liveEndpointTestEnabled + "=1 is required")
 	}
 
-	authPath := liveAuthCopy(t)
+	authPath := liveAuthPath(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	running, err := Start(ctx, Options{
 		AuthFilePath: authPath,
 		Host:         liveHost,
+		NoRefresh:    true,
 		Port:         liveFreePort(t),
 	})
 	assert.NilError(t, err)
@@ -100,31 +99,15 @@ func liveFreePort(t *testing.T) int {
 	return addr.Port
 }
 
-func liveAuthCopy(t *testing.T) string {
+func liveAuthPath(t *testing.T) string {
 	t.Helper()
 
-	sourcePath, err := auth.ExistingPath(os.Getenv("GO_OPENAI_PROXY_OAUTH_FILE"))
+	authPath, err := auth.ExistingPath(os.Getenv("GO_OPENAI_PROXY_OAUTH_FILE"))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("missing auth file; set CODEX_HOME or GO_OPENAI_PROXY_OAUTH_FILE")
-		}
-		t.Fatal(err)
+		t.Fatalf("missing auth file; set CODEX_HOME or GO_OPENAI_PROXY_OAUTH_FILE: %v", err)
 	}
 
-	content, err := os.ReadFile(sourcePath)
-	assert.NilError(t, err)
-
-	var authFile auth.File
-	assert.NilError(t, json.Unmarshal(content, &authFile))
-	authFile.LastRefresh = time.Now().UTC().Format(time.RFC3339Nano)
-	encoded, err := json.MarshalIndent(authFile, "", "  ")
-	assert.NilError(t, err)
-	encoded = append(encoded, '\n')
-
-	targetPath := filepath.Join(t.TempDir(), "auth.json")
-	assert.NilError(t, os.WriteFile(targetPath, encoded, 0o600))
-
-	return targetPath
+	return authPath
 }
 
 func liveJSONRequest(t *testing.T, client *http.Client, url string, payload any) ([]byte, int) {

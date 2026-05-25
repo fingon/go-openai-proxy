@@ -21,7 +21,6 @@ import (
 const (
 	authFilename        = "auth.json"
 	oauthRefreshGrant   = "refresh_token"
-	oauthRefreshScope   = "openid profile email offline_access"
 	accountIDClaim      = "chatgpt_account_id"
 	openAIAuthClaimName = "https://api.openai.com/auth"
 )
@@ -58,6 +57,7 @@ type Loader struct {
 	ClientID     string
 	EnsureFresh  bool
 	Issuer       string
+	NoRefresh    bool
 	Now          func() time.Time
 	TokenURL     string
 }
@@ -165,17 +165,17 @@ func (effective Effective) ShouldRefresh(now time.Time) bool {
 }
 
 func (loader Loader) Load(ctx context.Context) (Effective, error) {
-	if loader.Client == nil {
-		loader.Client = http.DefaultClient
-	}
-	if loader.ClientID == "" {
-		loader.ClientID = config.DefaultOAuthClientID
-	}
-	if loader.Issuer == "" {
-		loader.Issuer = config.DefaultOAuthIssuer
-	}
-	if loader.Now == nil {
-		loader.Now = time.Now
+	return loader.load(ctx, true)
+}
+
+func (loader Loader) LoadStored(ctx context.Context) (Effective, error) {
+	return loader.load(ctx, false)
+}
+
+func (loader Loader) Refresh(ctx context.Context) (Effective, error) {
+	loader = loader.withDefaults()
+	if loader.NoRefresh {
+		return Effective{}, errors.New("ChatGPT token refresh is disabled")
 	}
 
 	authPath, authFile, err := loader.readAuthFile()
@@ -189,24 +189,72 @@ func (loader Loader) Load(ctx context.Context) (Effective, error) {
 		accountID = DeriveAccountID(tokens.IDToken)
 	}
 
-	needsRefresh := loader.EnsureFresh && tokens.RefreshToken != "" &&
+	updatedTokens, updatedAccountID, updatedLastRefresh, err := loader.refreshedAuthFile(ctx, tokens, accountID)
+	if err != nil {
+		return Effective{}, err
+	}
+	tokens = updatedTokens
+	accountID = updatedAccountID
+	authFile.Tokens = updatedTokens
+	authFile.LastRefresh = updatedLastRefresh
+	if err := writeAuthFile(authPath, authFile); err != nil {
+		return Effective{}, err
+	}
+
+	return effectiveFromTokens(authPath, authFile.LastRefresh, tokens, accountID)
+}
+
+func (loader Loader) load(ctx context.Context, allowRefresh bool) (Effective, error) {
+	loader = loader.withDefaults()
+
+	authPath, authFile, err := loader.readAuthFile()
+	if err != nil {
+		return Effective{}, err
+	}
+
+	tokens := normalizeTokens(authFile.Tokens)
+	accountID := tokens.AccountID
+	if accountID == "" {
+		accountID = DeriveAccountID(tokens.IDToken)
+	}
+
+	needsRefresh := allowRefresh && loader.EnsureFresh && !loader.NoRefresh && tokens.RefreshToken != "" &&
 		shouldRefreshAccessToken(tokens.AccessToken, authFile.LastRefresh, loader.Now())
 	if needsRefresh {
-		updatedTokens, updatedAccountID, updatedLastRefresh, err := loader.refreshedAuthFile(ctx, tokens, authFile.LastRefresh, accountID)
+		updatedTokens, updatedAccountID, updatedLastRefresh, err := loader.refreshedAuthFile(ctx, tokens, accountID)
 		if err != nil {
 			return Effective{}, err
 		}
-		if updatedTokens.AccessToken != "" {
-			tokens = updatedTokens
-			accountID = updatedAccountID
-			authFile.Tokens = updatedTokens
-			authFile.LastRefresh = updatedLastRefresh
-			if err := writeAuthFile(authPath, authFile); err != nil {
-				return Effective{}, err
-			}
+		tokens = updatedTokens
+		accountID = updatedAccountID
+		authFile.Tokens = updatedTokens
+		authFile.LastRefresh = updatedLastRefresh
+		if err := writeAuthFile(authPath, authFile); err != nil {
+			return Effective{}, err
 		}
 	}
 
+	return effectiveFromTokens(authPath, authFile.LastRefresh, tokens, accountID)
+}
+
+func (loader Loader) withDefaults() Loader {
+	if loader.Client == nil {
+		loader.Client = http.DefaultClient
+	}
+	if loader.ClientID == "" {
+		loader.ClientID = config.DefaultOAuthClientID
+	}
+	if loader.Issuer == "" {
+		loader.Issuer = config.DefaultOAuthIssuer
+	}
+	if loader.Now == nil {
+		loader.Now = time.Now
+	}
+
+	return loader
+}
+
+func effectiveFromTokens(authPath, lastRefresh string, tokens StoredTokens, accountID string) (Effective, error) {
 	if tokens.AccessToken == "" {
 		return Effective{}, errors.New("ChatGPT access token not found. Run `codex login` to create auth.json")
 	}
@@ -218,22 +266,21 @@ func (loader Loader) Load(ctx context.Context) (Effective, error) {
 		AccountID:    accountID,
 		AccessToken:  tokens.AccessToken,
 		IDToken:      tokens.IDToken,
-		LastRefresh:  authFile.LastRefresh,
+		LastRefresh:  lastRefresh,
 		RefreshToken: tokens.RefreshToken,
 		SourcePath:   authPath,
 	}, nil
 }
 
-func (loader Loader) refreshedAuthFile(ctx context.Context, tokens StoredTokens, lastRefresh, accountID string) (StoredTokens, string, string, error) {
+func (loader Loader) refreshedAuthFile(ctx context.Context, tokens StoredTokens, accountID string) (StoredTokens, string, string, error) {
 	refreshed, err := loader.refreshTokens(ctx, tokens.RefreshToken)
 	if err != nil {
 		return StoredTokens{}, "", "", err
 	}
-	if refreshed.AccessToken == "" {
-		return StoredTokens{}, "", lastRefresh, nil
-	}
 
-	tokens.AccessToken = refreshed.AccessToken
+	if refreshed.AccessToken != "" {
+		tokens.AccessToken = refreshed.AccessToken
+	}
 	if refreshed.IDToken != "" {
 		tokens.IDToken = refreshed.IDToken
 	}
@@ -292,7 +339,6 @@ func (loader Loader) refreshTokens(ctx context.Context, refreshToken string) (re
 		"client_id":     loader.ClientID,
 		"grant_type":    oauthRefreshGrant,
 		"refresh_token": refreshToken,
-		"scope":         oauthRefreshScope,
 	})
 	if err != nil {
 		return refreshResponse{}, fmt.Errorf("marshal token refresh body: %w", err)
@@ -320,7 +366,7 @@ func (loader Loader) refreshTokens(ctx context.Context, refreshToken string) (re
 	}
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return refreshResponse{}, fmt.Errorf("refresh ChatGPT tokens: upstream returned %s", response.Status)
+		return refreshResponse{}, refreshError(response.StatusCode, response.Status, responseBody)
 	}
 
 	var parsed refreshResponse
@@ -343,7 +389,7 @@ func shouldRefreshAccessToken(accessToken, lastRefresh string, now time.Time) bo
 	if ok {
 		if expiry, ok := claims["exp"].(float64); ok {
 			expiryTime := time.Unix(int64(expiry), 0)
-			if !expiryTime.After(now.Add(config.RefreshExpiryMarginSeconds * time.Second)) {
+			if !expiryTime.After(now) {
 				return true
 			}
 		}
@@ -361,7 +407,69 @@ func shouldRefreshAccessToken(accessToken, lastRefresh string, now time.Time) bo
 		return false
 	}
 
-	return !refreshedAt.After(now.Add(-config.RefreshIntervalSeconds * time.Second))
+	return refreshedAt.Before(now.AddDate(0, 0, -config.TokenRefreshIntervalDays))
+}
+
+func refreshError(statusCode int, status string, body []byte) error {
+	if statusCode != http.StatusUnauthorized {
+		return fmt.Errorf("refresh ChatGPT tokens: upstream returned %s: %s", status, tryParseErrorMessage(body))
+	}
+
+	code := refreshErrorCode(body)
+	switch strings.ToLower(code) {
+	case "refresh_token_expired":
+		return errors.New("your access token could not be refreshed because your refresh token has expired; please log out and sign in again")
+	case "refresh_token_reused":
+		return errors.New("your access token could not be refreshed because your refresh token was already used; please log out and sign in again")
+	case "refresh_token_invalidated":
+		return errors.New("your access token could not be refreshed because your refresh token was revoked; please log out and sign in again")
+	default:
+		if code != "" {
+			slog.Warn("unknown token refresh 401 code", "code", code)
+		}
+		return errors.New("your access token could not be refreshed; please log out and sign in again")
+	}
+}
+
+func refreshErrorCode(body []byte) string {
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return ""
+	}
+
+	if errorValue, ok := parsed["error"]; ok {
+		switch value := errorValue.(type) {
+		case string:
+			return value
+		case map[string]any:
+			if code, ok := value["code"].(string); ok {
+				return code
+			}
+		}
+	}
+	if code, ok := parsed["code"].(string); ok {
+		return code
+	}
+
+	return ""
+}
+
+func tryParseErrorMessage(body []byte) string {
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		if parsed.Error.Message != "" {
+			return parsed.Error.Message
+		}
+		if parsed.Message != "" {
+			return parsed.Message
+		}
+	}
+	return string(body)
 }
 
 func normalizeTokens(tokens StoredTokens) StoredTokens {

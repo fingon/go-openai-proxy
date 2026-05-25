@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -97,23 +98,28 @@ func (resolver *Resolver) Resolve(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
-func (resolver *Resolver) CodexClientVersion(ctx context.Context) string {
+func (resolver *Resolver) CodexClientVersion(ctx context.Context) (string, error) {
 	if resolver.codexVersion != "" {
-		return resolver.codexVersion
+		return resolver.codexVersion, nil
 	}
 
 	resolver.versionMu.Lock()
 	if resolver.versionCache != "" && time.Now().Before(resolver.versionCacheExpiry) {
 		version := resolver.versionCache
 		resolver.versionMu.Unlock()
-		return version
+		return version, nil
 	}
 	resolver.versionMu.Unlock()
 
-	version := resolver.resolveRegistryVersion(ctx)
-	if version == "" {
-		version = config.FallbackCodexClientVersion
-		slog.Warn("could not determine Codex API version automatically", "fallback", version)
+	version, err := resolver.resolveInstalledCodexVersion(ctx)
+	if err != nil {
+		if !errors.Is(err, exec.ErrNotFound) {
+			return "", err
+		}
+		version, err = resolver.resolveRegistryVersion(ctx)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	resolver.versionMu.Lock()
@@ -121,11 +127,14 @@ func (resolver *Resolver) CodexClientVersion(ctx context.Context) string {
 	resolver.versionCacheExpiry = time.Now().Add(config.CodexVersionCacheTTLSeconds * time.Second)
 	resolver.versionMu.Unlock()
 
-	return version
+	return version, nil
 }
 
 func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, error) {
-	version := resolver.CodexClientVersion(ctx)
+	version, err := resolver.CodexClientVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
 	response, err := resolver.client.RawRequest(ctx, http.MethodGet, "/models?client_version="+url.QueryEscape(version), nil, nil)
 	if err != nil {
 		return nil, err
@@ -164,16 +173,35 @@ func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, e
 	return models, nil
 }
 
-func (resolver *Resolver) resolveRegistryVersion(ctx context.Context) string {
+func (resolver *Resolver) resolveInstalledCodexVersion(ctx context.Context) (string, error) {
+	path, err := exec.LookPath("codex")
+	if err != nil {
+		return "", err
+	}
+
+	output, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("determine Codex CLI version from %s: %w: %s", path, err, strings.TrimSpace(string(output)))
+	}
+
+	version := normalizeVersion(string(output))
+	if version == "" {
+		return "", fmt.Errorf("determine Codex CLI version from %s: unrecognized version output %q", path, strings.TrimSpace(string(output)))
+	}
+
+	return version, nil
+}
+
+func (resolver *Resolver) resolveRegistryVersion(ctx context.Context) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, codexRegistryURL, nil)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("create Codex registry request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
 
 	response, err := resolver.httpClient.Do(request)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("load Codex version from npm registry: %w", err)
 	}
 	defer func() {
 		if err := response.Body.Close(); err != nil {
@@ -182,15 +210,20 @@ func (resolver *Resolver) resolveRegistryVersion(ctx context.Context) string {
 	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return ""
+		return "", fmt.Errorf("load Codex version from npm registry: upstream returned %s", response.Status)
 	}
 
 	var parsed registryResponse
 	if err := json.NewDecoder(response.Body).Decode(&parsed); err != nil {
-		return ""
+		return "", fmt.Errorf("parse Codex registry response: %w", err)
 	}
 
-	return normalizeVersion(parsed.Version)
+	version := normalizeVersion(parsed.Version)
+	if version == "" {
+		return "", fmt.Errorf("parse Codex registry response: unrecognized version %q", parsed.Version)
+	}
+
+	return version, nil
 }
 
 func upstreamErrorMessage(body []byte) string {

@@ -23,11 +23,12 @@ codex login
 | Host binding | `--host` | `GO_OPENAI_PROXY_HOST` | `127.0.0.1` |
 | Port | `--port` | `GO_OPENAI_PROXY_PORT` | `17132` |
 | Model allowlist | `--models` | `GO_OPENAI_PROXY_MODELS` | Account-specific Codex models |
-| Codex API version | `--codex-version` | `GO_OPENAI_PROXY_CODEX_VERSION` | Registry latest, then `0.111.0` |
+| Codex API version | `--codex-version` | `GO_OPENAI_PROXY_CODEX_VERSION` | Installed `codex --version`, then registry latest |
 | Upstream base URL | `--base-url` | `GO_OPENAI_PROXY_BASE_URL` | `https://chatgpt.com/backend-api/codex` |
 | OAuth client id | `--oauth-client-id` | `GO_OPENAI_PROXY_OAUTH_CLIENT_ID` | `app_EMoamEEZ73f0CkXaXp7hrann` |
 | OAuth token URL | `--oauth-token-url` | `GO_OPENAI_PROXY_OAUTH_TOKEN_URL` | `https://auth.openai.com/oauth/token` |
 | Auth file path | `--oauth-file` | `GO_OPENAI_PROXY_OAUTH_FILE` | `$CHATGPT_LOCAL_HOME/auth.json`, `$CODEX_HOME/auth.json`, `~/.chatgpt-local/auth.json`, `~/.codex/auth.json` |
+| Disable OAuth refresh | `--no-refresh` | `GO_OPENAI_PROXY_NO_REFRESH` | disabled |
 | Verbose logging | `-v`, `--verbose` | `GO_OPENAI_PROXY_VERBOSE` | disabled |
 
 ## Container
@@ -49,7 +50,7 @@ podman run --rm -it \
 test -f "codex/auth.json"
 ```
 
-Treat `auth.json` as secret material. Do not commit it, paste it into logs, or share one writable auth file across multiple running proxy instances. The proxy refreshes OAuth tokens when needed and writes the updated token state back to `auth.json`, so mount the directory read-write.
+Treat `auth.json` as secret material. Do not commit it, paste it into logs, or share one writable auth file across multiple running proxy instances. The proxy refreshes OAuth tokens when needed and writes the updated token state back to `auth.json`, so mount the directory read-write. Use `--no-refresh` if another process owns OAuth refresh; the proxy will still reload same-account `auth.json` after a 401, but it will not call the OAuth refresh endpoint.
 
 The image runs as container UID/GID `0:0` by default. On rootless Linux Podman, container root maps back to the rootless host user, which allows the proxy to refresh a bind-mounted `auth.json` owned by your host user with mode `0600`.
 
@@ -94,6 +95,6 @@ To run the live endpoint smoke test against your Codex auth cache:
 CODEX_HOME="$PWD/codex" rtk make test-openai-endpoints
 ```
 
-The live test copies `auth.json` into a temporary directory before starting the proxy, then verifies models, Responses, Chat Completions, and the unsupported Embeddings route. It does not print token material.
+The live test uses your existing `auth.json` in place with OAuth refresh disabled, then verifies models, Responses, Chat Completions, and the unsupported Embeddings route. It does not print token material.
 
 This is unofficial software and is not affiliated with, endorsed by, or sponsored by OpenAI.

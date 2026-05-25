@@ -17,6 +17,11 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const (
+	testAuthTokenURL      = "https://auth.example.test/token"
+	testCodexResponsesURL = "https://codex.example.test/responses"
+)
+
 func TestResolveTargetURL(t *testing.T) {
 	client, err := NewClient(Options{BaseURL: "https://chatgpt.com/backend-api/codex"})
 	assert.NilError(t, err)
@@ -73,14 +78,14 @@ func TestRefreshesExpiredCachedAuthOnceForConcurrentRequests(t *testing.T) {
 	var refreshCount atomic.Int64
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.String() {
-		case "https://auth.example.test/token":
+		case testAuthTokenURL:
 			refreshCount.Add(1)
 			return jsonResponse(http.StatusOK, map[string]any{
 				"access_token":  freshAccessToken,
 				"id_token":      freshIDToken,
 				"refresh_token": "refresh-2",
 			}), nil
-		case "https://codex.example.test/responses":
+		case testCodexResponsesURL:
 			assert.Equal(t, request.Header.Get("Authorization"), "Bearer "+freshAccessToken)
 			assert.Equal(t, request.Header.Get("chatgpt-account-id"), "acct-2")
 			return jsonResponse(http.StatusOK, map[string]any{"ok": true}), nil
@@ -94,7 +99,7 @@ func TestRefreshesExpiredCachedAuthOnceForConcurrentRequests(t *testing.T) {
 		BaseURL:      "https://codex.example.test",
 		Client:       &http.Client{Transport: transport},
 		EnsureFresh:  true,
-		TokenURL:     "https://auth.example.test/token",
+		TokenURL:     testAuthTokenURL,
 	})
 	assert.NilError(t, err)
 
@@ -119,6 +124,107 @@ func TestRefreshesExpiredCachedAuthOnceForConcurrentRequests(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(content), `"access_token": "`+freshAccessToken+`"`))
 	assert.Assert(t, strings.Contains(string(content), `"refresh_token": "refresh-2"`))
+}
+
+func TestUnauthorizedRecoveryReloadsSameAccountAuthWithoutNetworkRefresh(t *testing.T) {
+	authPath := writeTestAuthFile(t, map[string]any{
+		"tokens": map[string]any{
+			"access_token":  "old-access",
+			"account_id":    "acct-1",
+			"refresh_token": "refresh-1",
+		},
+	})
+
+	var codexCount atomic.Int64
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.String() {
+		case testCodexResponsesURL:
+			count := codexCount.Add(1)
+			if count == 1 {
+				assert.Equal(t, request.Header.Get("Authorization"), "Bearer old-access")
+				updated := map[string]any{
+					"tokens": map[string]any{
+						"access_token":  "new-access",
+						"account_id":    "acct-1",
+						"refresh_token": "refresh-2",
+					},
+				}
+				encoded, err := json.MarshalIndent(updated, "", "  ")
+				assert.NilError(t, err)
+				assert.NilError(t, os.WriteFile(authPath, encoded, 0o600))
+				return jsonResponse(http.StatusUnauthorized, map[string]any{"error": "unauthorized"}), nil
+			}
+			assert.Equal(t, request.Header.Get("Authorization"), "Bearer new-access")
+			return jsonResponse(http.StatusOK, map[string]any{"ok": true}), nil
+		case testAuthTokenURL:
+			t.Fatalf("refresh endpoint should not be called")
+			return nil, nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+
+	client, err := NewClient(Options{
+		AuthFilePath: authPath,
+		BaseURL:      "https://codex.example.test",
+		Client:       &http.Client{Transport: transport},
+		EnsureFresh:  true,
+		NoRefresh:    true,
+		TokenURL:     testAuthTokenURL,
+	})
+	assert.NilError(t, err)
+
+	response, err := client.RawRequest(context.Background(), http.MethodPost, "/responses", nil, nil)
+	assert.NilError(t, err)
+	defer func() {
+		assert.NilError(t, response.Body.Close())
+	}()
+	assert.Equal(t, response.StatusCode, http.StatusOK)
+	assert.Equal(t, codexCount.Load(), int64(2))
+}
+
+func TestNoRefreshDoesNotCallRefreshEndpointAfterUnauthorized(t *testing.T) {
+	authPath := writeTestAuthFile(t, map[string]any{
+		"tokens": map[string]any{
+			"access_token":  "old-access",
+			"account_id":    "acct-1",
+			"refresh_token": "refresh-1",
+		},
+	})
+
+	var codexCount atomic.Int64
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.String() {
+		case testCodexResponsesURL:
+			codexCount.Add(1)
+			return jsonResponse(http.StatusUnauthorized, map[string]any{"error": "unauthorized"}), nil
+		case testAuthTokenURL:
+			t.Fatalf("refresh endpoint should not be called")
+			return nil, nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+
+	client, err := NewClient(Options{
+		AuthFilePath: authPath,
+		BaseURL:      "https://codex.example.test",
+		Client:       &http.Client{Transport: transport},
+		EnsureFresh:  true,
+		NoRefresh:    true,
+		TokenURL:     testAuthTokenURL,
+	})
+	assert.NilError(t, err)
+
+	response, err := client.RawRequest(context.Background(), http.MethodPost, "/responses", nil, nil)
+	assert.NilError(t, err)
+	defer func() {
+		assert.NilError(t, response.Body.Close())
+	}()
+	assert.Equal(t, response.StatusCode, http.StatusUnauthorized)
+	assert.Equal(t, codexCount.Load(), int64(1))
 }
 
 type roundTripFunc func(request *http.Request) (*http.Response, error)
