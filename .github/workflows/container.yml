@@ -25,6 +25,9 @@ jobs:
       - name: Setup ko
         uses: ko-build/setup-ko@v0.9
 
+      - name: Set image timestamp
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
       - name: Build and push image
         env:
           KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
