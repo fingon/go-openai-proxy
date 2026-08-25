@@ -88,7 +88,18 @@ The proxy intentionally supports only routes that have been tested with Codex OA
 | `POST /v1/embeddings` | Unsupported | Tested with Codex OAuth and not accepted by the Codex upstream route shape. |
 | `POST /v1/completions` | Unsupported | Tested with Codex OAuth and not accepted by the Codex upstream route shape. |
 
-The Responses adapter always sends a streaming request to Codex and aggregates the SSE events for non-streaming callers. It sets `store=false` by default and rejects `previous_response_id` and `item_reference`, so clients must replay the full conversation history in `input` on each request. Response retrieval, input item listing, and other server-side replay state APIs are not supported.
+The Responses adapter always sends a streaming request to Codex and aggregates the SSE events for non-streaming callers. It forces `store=false` and rejects `previous_response_id` and `item_reference`, so clients must replay the full conversation history in `input` on each request. Response retrieval, input item listing, and other server-side replay state APIs are not supported.
+
+## Request normalization
+
+The ChatGPT OAuth codex endpoint is stricter than the public Responses API, so both endpoints normalize requests before forwarding:
+
+- `role:"system"` and `role:"developer"` messages in `input` (and Chat Completions `messages`) are promoted into the top-level `instructions` field; text-only entries are removed from `input`, mixed-content entries are kept as `developer` messages.
+- Parameters rejected by the OAuth endpoint are dropped: `temperature`, `top_p`, `stop`, `frequency_penalty`, `presence_penalty`, `max_tokens`, `max_completion_tokens`, `max_output_tokens`, `user`, `metadata`, `stream_options`, `truncation`, `safety_identifier`.
+- String `input` values become message arrays; `role:"tool"` rows become `function_call_output` items; legacy Chat Completions `functions`/`function_call` map to `tools`/`tool_choice`.
+- Function/tool call ids are normalized to the upstream-required `fc_` prefix; replayed `reasoning` items lose their server-side ids and get a required empty `summary`, while `reasoning.encrypted_content` is requested so multi-turn reasoning context survives with `store=false`.
+- Model ids with an effort variant suffix such as `gpt-5.3-codex-high` set the matching `reasoning.effort` unless reasoning was already specified.
+- Outbound requests carry Codex CLI identity headers (`originator`, paired `User-Agent`, `version`, `session_id`). The version comes from the installed Codex CLI or the npm registry and is clamped to the lowest version the upstream accepts.
 
 To run the live endpoint smoke test against your Codex auth cache:
 

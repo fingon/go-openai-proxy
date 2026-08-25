@@ -1,0 +1,21 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "encrypted_content": "enc",
+      "summary": [],
+      "type": "reasoning"
+    },
+    {
+      "content": "hi",
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5.2",
+  "store": false,
+  "stream": true
+}

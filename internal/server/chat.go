@@ -15,24 +15,34 @@ import (
 )
 
 type chatRequest struct {
-	MaxTokens         int           `json:"max_tokens,omitempty"`
-	Messages          []chatMessage `json:"messages"`
-	Model             string        `json:"model,omitempty"`
-	ParallelToolCalls *bool         `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort   string        `json:"reasoning_effort,omitempty"`
-	Stop              any           `json:"stop,omitempty"`
-	Stream            bool          `json:"stream,omitempty"`
-	Temperature       *float64      `json:"temperature,omitempty"`
-	ToolChoice        any           `json:"tool_choice,omitempty"`
-	Tools             []chatTool    `json:"tools,omitempty"`
-	TopP              *float64      `json:"top_p,omitempty"`
+	Functions         []chatToolFunction `json:"functions,omitempty"`
+	FunctionCall      any                `json:"function_call,omitempty"`
+	MaxTokens         int                `json:"max_tokens,omitempty"`
+	Messages          []chatMessage      `json:"messages"`
+	Model             string             `json:"model,omitempty"`
+	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort   string             `json:"reasoning_effort,omitempty"`
+	ResponseFormat    any                `json:"response_format,omitempty"`
+	Stop              any                `json:"stop,omitempty"`
+	Stream            bool               `json:"stream,omitempty"`
+	StreamOptions     *chatStreamOptions `json:"stream_options,omitempty"`
+	Temperature       *float64           `json:"temperature,omitempty"`
+	ToolChoice        any                `json:"tool_choice,omitempty"`
+	Tools             []chatTool         `json:"tools,omitempty"`
+	TopP              *float64           `json:"top_p,omitempty"`
+}
+
+type chatStreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type chatMessage struct {
-	Content    any            `json:"content,omitempty"`
-	Role       string         `json:"role,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+	Content          any            `json:"content,omitempty"`
+	Name             string         `json:"name,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	Role             string         `json:"role,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	ToolCalls        []chatToolCall `json:"tool_calls,omitempty"`
 }
 
 type chatTool struct {
@@ -112,23 +122,16 @@ func (chat chatRequest) toResponsesPayload() map[string]any {
 		"input": chat.toResponsesInput(),
 		"model": model,
 	}
-	if len(chat.Tools) > 0 {
+	if len(chat.Tools) > 0 || len(chat.Functions) > 0 {
 		payload["tools"] = chat.toResponsesTools()
 	}
 	if chat.ToolChoice != nil {
 		payload["tool_choice"] = chat.ToolChoice
+	} else if converted := convertFunctionCallToToolChoice(chat.FunctionCall); converted != nil {
+		payload["tool_choice"] = converted
 	}
-	if chat.Temperature != nil {
-		payload["temperature"] = *chat.Temperature
-	}
-	if chat.TopP != nil {
-		payload["top_p"] = *chat.TopP
-	}
-	if chat.Stop != nil {
-		payload["stop"] = chat.Stop
-	}
-	if chat.MaxTokens > 0 {
-		payload["max_output_tokens"] = chat.MaxTokens
+	if format := responseFormatToTextFormat(chat.ResponseFormat); format != nil {
+		payload["text"] = format
 	}
 	if chat.ParallelToolCalls != nil {
 		payload["parallel_tool_calls"] = *chat.ParallelToolCalls
@@ -140,9 +143,51 @@ func (chat chatRequest) toResponsesPayload() map[string]any {
 	return payload
 }
 
+// responseFormatToTextFormat converts a Chat Completions response_format into
+// the Responses API text.format shape; unsupported values return nil.
+func responseFormatToTextFormat(value any) any {
+	format, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	switch format["type"] {
+	case "json_object":
+		return map[string]any{"format": map[string]any{"type": "json_object"}}
+	case "json_schema":
+		schema := map[string]any{"type": "json_schema"}
+		for _, key := range []string{"name", "schema", "strict", "description"} {
+			if entry, ok := format[key]; ok && entry != nil {
+				schema[key] = entry
+			}
+		}
+		return map[string]any{"format": schema}
+	default:
+		return nil
+	}
+}
+
+// convertFunctionCallToToolChoice maps the legacy function_call field to a
+// Responses tool_choice value; nil is returned when there is nothing to map.
+func convertFunctionCallToToolChoice(value any) any {
+	switch typed := value.(type) {
+	case string:
+		if typed == "" {
+			return nil
+		}
+		return typed
+	case map[string]any:
+		name, _ := typed["name"].(string)
+		if name == "" {
+			return nil
+		}
+		return map[string]any{"name": name, "type": "function"}
+	default:
+		return nil
+	}
+}
+
 func (chat chatRequest) toResponsesInput() []any {
 	input := make([]any, 0, len(chat.Messages))
-	toolNamesByID := make(map[string]string)
 	for _, message := range chat.Messages {
 		switch message.Role {
 		case "tool":
@@ -151,8 +196,16 @@ func (chat chatRequest) toResponsesInput() []any {
 				"output":  stringifyContent(message.Content),
 				"type":    "function_call_output",
 			})
+		case "function":
+			// Legacy function result rows carry no call id; the function name
+			// doubles as one so the output stays paired with its call.
+			input = append(input, map[string]any{
+				"call_id": message.Name,
+				"output":  stringifyContent(message.Content),
+				"type":    "function_call_output",
+			})
 		case "assistant":
-			if text := stringifyContent(message.Content); text != "" {
+			if text := assistantText(message); text != "" {
 				input = append(input, map[string]any{
 					"content": []any{map[string]any{"text": text, "type": "output_text"}},
 					"role":    "assistant",
@@ -163,12 +216,11 @@ func (chat chatRequest) toResponsesInput() []any {
 				if toolCall.ID == "" || toolCall.Function.Name == "" {
 					continue
 				}
-				toolNamesByID[toolCall.ID] = toolCall.Function.Name
 				input = append(input, map[string]any{
 					"arguments": toolCall.Function.Arguments,
 					"call_id":   toolCall.ID,
 					"name":      toolCall.Function.Name,
-					"type":      "function_call",
+					"type":      itemTypeFunctionCall,
 				})
 			}
 		default:
@@ -183,29 +235,47 @@ func (chat chatRequest) toResponsesInput() []any {
 			})
 		}
 	}
-	_ = toolNamesByID
 
 	return input
 }
 
+// assistantText renders assistant history as text; reasoning content from
+// compatible clients is preserved inside explicit thinking tags.
+func assistantText(message chatMessage) string {
+	text := stringifyContent(message.Content)
+	if message.ReasoningContent != "" {
+		reasoning := "<thinking>" + message.ReasoningContent + "</thinking>"
+		if text != "" {
+			reasoning += "\n" + text
+		}
+		text = reasoning
+	}
+
+	return text
+}
+
 func (chat chatRequest) toResponsesTools() []any {
-	tools := make([]any, 0, len(chat.Tools))
+	tools := make([]any, 0, len(chat.Tools)+len(chat.Functions))
 	for _, tool := range chat.Tools {
 		if tool.Type != "function" || tool.Function.Name == "" {
 			continue
 		}
-		parameters := tool.Function.Parameters
-		if parameters == nil {
-			parameters = map[string]any{
-				"additionalProperties": true,
-				"properties":           map[string]any{},
-				"type":                 "object",
-			}
-		}
 		tools = append(tools, map[string]any{
 			"description": tool.Function.Description,
 			"name":        tool.Function.Name,
-			"parameters":  parameters,
+			"parameters":  toolParameters(tool.Function),
+			"type":        "function",
+		})
+	}
+	// Legacy functions[] entries are plain function definitions.
+	for _, function := range chat.Functions {
+		if function.Name == "" {
+			continue
+		}
+		tools = append(tools, map[string]any{
+			"description": function.Description,
+			"name":        function.Name,
+			"parameters":  toolParameters(function),
 			"type":        "function",
 		})
 	}
@@ -213,13 +283,76 @@ func (chat chatRequest) toResponsesTools() []any {
 	return tools
 }
 
-func toInputContent(content any) []any {
-	text := stringifyContent(content)
-	if text == "" {
-		return []any{}
+func toolParameters(function chatToolFunction) map[string]any {
+	parameters := function.Parameters
+	if parameters == nil {
+		parameters = map[string]any{
+			"additionalProperties": true,
+			"properties":           map[string]any{},
+			"type":                 "object",
+		}
 	}
 
-	return []any{map[string]any{"text": text, "type": "input_text"}}
+	return parameters
+}
+
+// toInputContent converts Chat Completions message content into Responses
+// input content parts; text becomes input_text and image URLs become
+// input_image parts.
+func toInputContent(content any) []any {
+	parts, ok := content.([]any)
+	if !ok {
+		text := stringifyContent(content)
+		if text == "" {
+			return []any{}
+		}
+		return []any{map[string]any{"text": text, "type": "input_text"}}
+	}
+
+	converted := make([]any, 0, len(parts))
+	for _, part := range parts {
+		switch typedPart := part.(type) {
+		case string:
+			if typedPart != "" {
+				converted = append(converted, map[string]any{"text": typedPart, "type": "input_text"})
+			}
+		case map[string]any:
+			switch partType, _ := typedPart["type"].(string); partType {
+			case "", "text":
+				if text, ok := typedPart["text"].(string); ok && text != "" {
+					converted = append(converted, map[string]any{"text": text, "type": "input_text"})
+				}
+			case "image_url":
+				if imageURL := extractImageURL(typedPart["image_url"]); imageURL != "" {
+					converted = append(converted, map[string]any{"image_url": imageURL, "type": "input_image"})
+				}
+			case "input_image":
+				converted = append(converted, typedPart)
+			case "input_text":
+				converted = append(converted, typedPart)
+			default:
+				// Other modalities are not supported by this endpoint; their
+				// text form is preserved so nothing disappears silently.
+				if text := stringifyContent(typedPart); text != "" && text != "{}" {
+					converted = append(converted, map[string]any{"text": text, "type": "input_text"})
+				}
+			}
+		}
+	}
+
+	return converted
+}
+
+func extractImageURL(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case map[string]any:
+		url, _ := typed["url"].(string)
+		return url
+	default:
+		return ""
+	}
 }
 
 func stringifyContent(content any) string {
@@ -277,7 +410,7 @@ func toChatCompletion(response map[string]any, request chatRequest) map[string]a
 		"id":      "chatcmpl_" + responseID(response),
 		"model":   model,
 		"object":  "chat.completion",
-		"usage":   usage(response),
+		"usage":   usageFromResponse(response),
 	}
 }
 
@@ -285,6 +418,8 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 	addHeaders(responseWriter.Header(), sseHeaders)
 	addHeaders(responseWriter.Header(), corsHeaders)
 	responseWriter.WriteHeader(http.StatusOK)
+
+	flusher, _ := responseWriter.(http.Flusher)
 
 	id := "chatcmpl_" + randomishID()
 	created := time.Now().Unix()
@@ -300,16 +435,44 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 		"model":   model,
 		"object":  "chat.completion.chunk",
 	})
-
-	events, err := sse.ReadAll(upstream.Body)
-	if err != nil {
-		slog.Error("read upstream chat stream failed", "error", err)
-		return
+	if flusher != nil {
+		flusher.Flush()
 	}
-	for _, event := range events {
-		chunks := chatChunksFromEvent(event, id, created, model)
+
+	reader := sse.NewReader(upstream.Body)
+	tracker := newStreamedToolCallTracker()
+	var finalUsage any
+	for {
+		event, ok := reader.Next()
+		if !ok {
+			break
+		}
+		chunks, eventUsage := chatChunksFromEvent(event, id, created, model, tracker)
 		for _, chunk := range chunks {
 			writeChatSSE(responseWriter, chunk)
+		}
+		if len(chunks) > 0 && flusher != nil {
+			flusher.Flush()
+		}
+		if eventUsage != nil {
+			finalUsage = eventUsage
+		}
+	}
+	if err := reader.Err(); err != nil {
+		slog.Error("read upstream chat stream failed", "error", err)
+	}
+
+	if finalUsage != nil && request.StreamOptions != nil && request.StreamOptions.IncludeUsage {
+		writeChatSSE(responseWriter, map[string]any{
+			"choices": []any{},
+			"created": created,
+			"id":      id,
+			"model":   model,
+			"object":  "chat.completion.chunk",
+			"usage":   finalUsage,
+		})
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 
@@ -317,40 +480,200 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 		slog.Error("write chat stream done failed", "error", err)
 		return
 	}
+	if flusher != nil {
+		flusher.Flush()
+	}
 }
 
-func chatChunksFromEvent(event sse.Event, id string, created int64, model string) []any {
+// streamedToolCall tracks one upstream function_call item as it streams so its
+// deltas can be mapped to a Chat Completions tool_calls index.
+type streamedToolCall struct {
+	chatIndex  int
+	deltasSent bool
+}
+
+type streamedToolCallTracker struct {
+	byItemID         map[string]*streamedToolCall
+	byOutputIndex    map[int]*streamedToolCall
+	finishReasonSent bool
+	hasTools         bool
+	nextChatIndex    int
+}
+
+func newStreamedToolCallTracker() *streamedToolCallTracker {
+	return &streamedToolCallTracker{
+		byItemID:      map[string]*streamedToolCall{},
+		byOutputIndex: map[int]*streamedToolCall{},
+	}
+}
+
+func (tracker *streamedToolCallTracker) register(outputIndex int, itemID string) *streamedToolCall {
+	call := &streamedToolCall{chatIndex: tracker.nextChatIndex}
+	tracker.nextChatIndex++
+	tracker.hasTools = true
+	if outputIndex >= 0 {
+		tracker.byOutputIndex[outputIndex] = call
+	}
+	if itemID != "" {
+		tracker.byItemID[itemID] = call
+	}
+
+	return call
+}
+
+func (tracker *streamedToolCallTracker) lookup(outputIndex int, itemID string) *streamedToolCall {
+	if outputIndex >= 0 {
+		if call, ok := tracker.byOutputIndex[outputIndex]; ok {
+			return call
+		}
+	}
+	if itemID != "" {
+		if call, ok := tracker.byItemID[itemID]; ok {
+			return call
+		}
+	}
+
+	return nil
+}
+
+func chatChunksFromEvent(event sse.Event, id string, created int64, model string, tracker *streamedToolCallTracker) ([]any, any) {
 	if event.Data == "" {
-		return nil
+		return nil, nil
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+		return nil, nil
+	}
+
+	eventType := eventTypeOf(event, payload)
+	var usage any
+	var chunks []any
+
+	switch {
+	case strings.Contains(eventType, "output_text.delta"):
+		if delta, ok := payload["delta"].(string); ok {
+			chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{"content": delta}, nil))
+		}
+	case strings.Contains(eventType, "function_call_arguments.delta"):
+		if delta, ok := payload["delta"].(string); ok {
+			chunks = append(chunks, tracker.argumentsDeltaChunk(payload, delta, id, created, model)...)
+		}
+	case strings.HasSuffix(eventType, "output_item.added"):
+		chunks = append(chunks, tracker.itemAddedChunks(payload, id, created, model)...)
+	case strings.HasSuffix(eventType, "output_item.done"):
+		chunks = append(chunks, tracker.itemDoneChunks(payload, id, created, model)...)
+	case strings.Contains(eventType, "error"):
+		slog.Warn("upstream chat stream error event", "event", eventType)
+	}
+
+	if response, ok := payload["response"].(map[string]any); ok {
+		if _, ok := response["usage"].(map[string]any); ok {
+			usage = usageFromResponse(response)
+		}
+		if !tracker.finishReasonSent {
+			if finish := streamingFinishReason(response, tracker); finish != nil {
+				tracker.finishReasonSent = true
+				chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{}, finish))
+			}
+		}
+	}
+
+	return chunks, usage
+}
+
+// eventTypeOf prefers the typed field inside the data payload and falls back
+// to the SSE event name.
+func eventTypeOf(event sse.Event, payload map[string]any) string {
+	if eventType, ok := payload["type"].(string); ok && eventType != "" {
+		return eventType
+	}
+
+	return event.Event
+}
+
+func (tracker *streamedToolCallTracker) argumentsDeltaChunk(payload map[string]any, delta, id string, created int64, model string) []any {
+	call := tracker.lookup(intValueFrom(payload["output_index"]), stringValueFrom(payload["item_id"]))
+	if call == nil {
+		call = tracker.register(-1, stringValueFrom(payload["item_id"]))
+	}
+	call.deltasSent = true
+
+	return []any{chatDeltaChunk(id, created, model, map[string]any{
+		"tool_calls": []any{map[string]any{
+			"function": map[string]any{"arguments": delta},
+			"index":    call.chatIndex,
+		}},
+	}, nil)}
+}
+
+func (tracker *streamedToolCallTracker) itemAddedChunks(payload map[string]any, id string, created int64, model string) []any {
+	item, ok := payload["item"].(map[string]any)
+	if !ok || item["type"] != itemTypeFunctionCall {
 		return nil
 	}
 
-	eventType, _ := payload["type"].(string)
-	var chunks []any
-	if delta, ok := payload["delta"].(string); ok && strings.Contains(eventType, "output_text.delta") {
-		chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{"content": delta}, nil))
+	outputIndex := intValueFrom(payload["output_index"])
+	itemID := stringValueFrom(item["id"])
+	call := tracker.lookup(outputIndex, itemID)
+	if call == nil {
+		call = tracker.register(outputIndex, itemID)
 	}
-	if delta, ok := payload["delta"].(string); ok && strings.Contains(eventType, "function_call_arguments.delta") {
-		chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{"tool_calls": []any{map[string]any{
-			"function": map[string]any{"arguments": delta},
-			"index":    0,
-		}}}, nil))
-	}
-	if response, ok := payload["response"].(map[string]any); ok {
-		text := extractText(response)
-		if text != "" {
-			chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{"content": text}, nil))
-		}
-		if finish := finishReason(response); finish != nil {
-			chunks = append(chunks, chatDeltaChunk(id, created, model, map[string]any{}, finish))
-		}
+	name := stringValueFrom(item["name"])
+
+	return []any{chatDeltaChunk(id, created, model, map[string]any{
+		"tool_calls": []any{map[string]any{
+			"function": map[string]any{"name": name},
+			"id":       stringValueFrom(item["call_id"]),
+			"index":    call.chatIndex,
+			"type":     "function",
+		}},
+	}, nil)}
+}
+
+func (tracker *streamedToolCallTracker) itemDoneChunks(payload map[string]any, id string, created int64, model string) []any {
+	item, ok := payload["item"].(map[string]any)
+	if !ok || item["type"] != itemTypeFunctionCall {
+		return nil
 	}
 
-	return chunks
+	outputIndex := intValueFrom(payload["output_index"])
+	itemID := stringValueFrom(item["id"])
+	call := tracker.lookup(outputIndex, itemID)
+	if call == nil {
+		call = tracker.register(outputIndex, itemID)
+	}
+	if call.deltasSent {
+		// Deltas already carried the full argument stream.
+		return nil
+	}
+	call.deltasSent = true
+	arguments := stringValueFrom(item["arguments"])
+
+	return []any{chatDeltaChunk(id, created, model, map[string]any{
+		"tool_calls": []any{map[string]any{
+			"function": map[string]any{"arguments": arguments},
+			"id":       stringValueFrom(item["call_id"]),
+			"index":    call.chatIndex,
+			"type":     "function",
+		}},
+	}, nil)}
+}
+
+func intValueFrom(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	default:
+		return -1
+	}
+}
+
+func stringValueFrom(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func chatDeltaChunk(id string, created int64, model string, delta map[string]any, finish any) map[string]any {
@@ -413,7 +736,7 @@ func extractToolCalls(response map[string]any) []any {
 	toolCalls := make([]any, 0)
 	for index, item := range output {
 		itemMap, ok := item.(map[string]any)
-		if !ok || itemMap["type"] != "function_call" {
+		if !ok || itemMap["type"] != itemTypeFunctionCall {
 			continue
 		}
 		toolCalls = append(toolCalls, map[string]any{
@@ -430,22 +753,37 @@ func extractToolCalls(response map[string]any) []any {
 	return toolCalls
 }
 
-func finishReason(response map[string]any) any {
+const (
+	finishReasonLength    = "length"
+	finishReasonStop      = "stop"
+	finishReasonToolCalls = "tool_calls"
+	itemTypeFunctionCall  = "function_call"
+)
+
+// streamingFinishReason maps a terminal Responses status to a Chat Completions
+// finish reason, preferring streamed tool-call state over the (often empty)
+// final response output array.
+func streamingFinishReason(response map[string]any, tracker *streamedToolCallTracker) any {
 	status, _ := response["status"].(string)
 	switch status {
 	case "completed":
-		if len(extractToolCalls(response)) > 0 {
-			return "tool_calls"
+		if tracker.hasTools {
+			return finishReasonToolCalls
 		}
-		return "stop"
+		return finishReasonStop
 	case "incomplete":
-		return "length"
+		return finishReasonLength
 	default:
 		return nil
 	}
 }
 
-func usage(response map[string]any) map[string]any {
+func finishReason(response map[string]any) any {
+	tracker := &streamedToolCallTracker{hasTools: len(extractToolCalls(response)) > 0}
+	return streamingFinishReason(response, tracker)
+}
+
+func usageFromResponse(response map[string]any) map[string]any {
 	rawUsage, _ := response["usage"].(map[string]any)
 	inputTokens := numberValue(rawUsage["input_tokens"])
 	outputTokens := numberValue(rawUsage["output_tokens"])

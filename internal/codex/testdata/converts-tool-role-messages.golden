@@ -1,0 +1,21 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "call_id": "call_xyz",
+      "output": "42",
+      "type": "function_call_output"
+    },
+    {
+      "content": "thanks",
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5.2",
+  "store": false,
+  "stream": true
+}

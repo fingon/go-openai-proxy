@@ -2,7 +2,6 @@ package sse
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,19 +15,71 @@ type Event struct {
 	Event string
 }
 
-func ReadAll(reader io.Reader) ([]Event, error) {
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("read SSE stream: %w", err)
+// Reader reads SSE events incrementally as they arrive on the wire instead of
+// buffering the whole stream.
+type Reader struct {
+	scanner *bufio.Scanner
+}
+
+func NewReader(reader io.Reader) *Reader {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxEventSizeBytes)
+
+	return &Reader{scanner: scanner}
+}
+
+const maxEventSizeBytes = 32 << 20
+
+// Next returns the next event; ok is false at end of stream.
+func (reader *Reader) Next() (Event, bool) {
+	var (
+		dataLines []string
+		eventName string
+		started   bool
+	)
+	for reader.scanner.Scan() {
+		line := strings.TrimRight(reader.scanner.Text(), "\r")
+		if line == "" {
+			if !started {
+				continue
+			}
+			return Event{Data: strings.Join(dataLines, "\n"), Event: eventName}, true
+		}
+		started = true
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimLeft(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+	if started {
+		return Event{Data: strings.Join(dataLines, "\n"), Event: eventName}, true
 	}
 
-	blocks := bytes.Split(content, []byte("\n\n"))
-	events := make([]Event, 0, len(blocks))
-	for _, block := range blocks {
-		if len(bytes.TrimSpace(block)) == 0 {
+	return Event{}, false
+}
+
+// Err reports the first read or token-size error encountered while scanning.
+func (reader *Reader) Err() error {
+	return reader.scanner.Err()
+}
+
+func ReadAll(reader io.Reader) ([]Event, error) {
+	events := make([]Event, 0, 64)
+	sseReader := NewReader(reader)
+	for {
+		event, ok := sseReader.Next()
+		if !ok {
+			break
+		}
+		if event.Data == "" && event.Event == "" {
 			continue
 		}
-		events = append(events, parseBlock(block))
+		events = append(events, event)
+	}
+	if err := sseReader.Err(); err != nil {
+		return nil, fmt.Errorf("read SSE stream: %w", err)
 	}
 
 	return events, nil
@@ -128,22 +179,4 @@ func EncodeData(value any) ([]byte, error) {
 
 func Done() []byte {
 	return []byte("data: [DONE]\n\n")
-}
-
-func parseBlock(block []byte) Event {
-	var event Event
-	var dataLines []string
-	scanner := bufio.NewScanner(bytes.NewReader(block))
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
-		switch {
-		case strings.HasPrefix(line, "event:"):
-			event.Event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		case strings.HasPrefix(line, "data:"):
-			dataLines = append(dataLines, strings.TrimLeft(strings.TrimPrefix(line, "data:"), " "))
-		}
-	}
-	event.Data = strings.Join(dataLines, "\n")
-
-	return event
 }

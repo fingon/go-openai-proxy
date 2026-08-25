@@ -1,0 +1,32 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "arguments": "{\"q\":1}",
+      "call_id": "fc_abc123",
+      "name": "lookup",
+      "type": "function_call"
+    },
+    {
+      "call_id": "fc_abc123",
+      "output": "result",
+      "type": "function_call_output"
+    },
+    {
+      "content": [
+        {
+          "text": "done",
+          "type": "output_text"
+        }
+      ],
+      "role": "assistant",
+      "type": "message"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5.2",
+  "store": false,
+  "stream": true
+}

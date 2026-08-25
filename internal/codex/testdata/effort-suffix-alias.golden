@@ -1,0 +1,19 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "content": "hi",
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5.3-codex-high",
+  "reasoning": {
+    "effort": "high"
+  },
+  "store": false,
+  "stream": true
+}

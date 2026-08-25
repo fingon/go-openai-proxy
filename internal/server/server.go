@@ -86,14 +86,24 @@ func NewHandler(options Options) (*Handler, error) {
 		return nil, err
 	}
 
+	resolver := models.NewResolver(codexClient, models.Options{
+		CodexVersion:   options.CodexVersion,
+		ExcludedModels: options.ExcludedModels,
+		HTTPClient:     options.HTTPClient,
+		Models:         options.Models,
+	})
+	codexClient.SetVersionResolver(func(ctx context.Context) string {
+		version, err := resolver.CodexClientVersion(ctx)
+		if err != nil {
+			slog.Debug("resolve Codex CLI version failed", "error", err)
+			return ""
+		}
+		return version
+	})
+
 	return &Handler{
 		codexClient: codexClient,
-		models: models.NewResolver(codexClient, models.Options{
-			CodexVersion:   options.CodexVersion,
-			ExcludedModels: options.ExcludedModels,
-			HTTPClient:     options.HTTPClient,
-			Models:         options.Models,
-		}),
+		models:      resolver,
 	}, nil
 }
 

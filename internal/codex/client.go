@@ -28,6 +28,8 @@ type Client struct {
 	httpClient HTTPClient
 	mu         sync.Mutex
 	current    auth.Effective
+	identity   identityCache
+	resolver   versionResolver
 }
 
 type Options struct {
@@ -39,6 +41,9 @@ type Options struct {
 	Issuer       string
 	NoRefresh    bool
 	TokenURL     string
+	// VersionResolver supplies the Codex CLI version advertised in identity
+	// headers; empty results fall back to config.FallbackCodexIdentityVersion.
+	VersionResolver versionResolver
 }
 
 func NewClient(options Options) (*Client, error) {
@@ -72,6 +77,7 @@ func NewClient(options Options) (*Client, error) {
 		},
 		baseURL:    parsedBaseURL,
 		httpClient: httpClient,
+		resolver:   options.VersionResolver,
 	}, nil
 }
 
@@ -139,29 +145,67 @@ func (client *Client) ResolveTargetURL(input string) (*url.URL, error) {
 	return &target, nil
 }
 
-func (client *Client) do(ctx context.Context, method string, targetURL *url.URL, header http.Header, body []byte) (*http.Response, error) {
-	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
-	}
+// hopByHopHeaders are connection-scoped values that must not leak upstream;
+// Accept-Encoding is included because Go's transport manages compression.
+var hopByHopHeaders = []string{
+	"Accept-Encoding",
+	"Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization",
+	"Te",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+}
 
-	request, err := http.NewRequestWithContext(ctx, method, targetURL.String(), reader)
+func (client *Client) newUpstreamRequest(ctx context.Context, method string, targetURL *url.URL, body []byte, inbound http.Header, effectiveAuth auth.Effective) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, method, targetURL.String(), readerForBody(body))
 	if err != nil {
 		return nil, fmt.Errorf("create upstream request: %w", err)
 	}
 
-	copyHeaders(request.Header, header)
+	copyHeaders(request.Header, inbound)
+	for _, key := range hopByHopHeaders {
+		request.Header.Del(key)
+	}
 	request.Header.Del("Authorization")
 	request.Header.Del("Chatgpt-Account-Id")
 	request.Header.Del("Openai-Beta")
 
+	request.Header.Set("Authorization", "Bearer "+effectiveAuth.AccessToken)
+	request.Header.Set("chatgpt-account-id", effectiveAuth.AccountID)
+	request.Header.Set("OpenAI-Beta", config.OpenAIBetaResponsesHeader)
+	client.applyIdentity(ctx, request.Header)
+
+	return request, nil
+}
+
+func (client *Client) applyIdentity(ctx context.Context, header http.Header) {
+	resolver := client.resolver
+	if resolver == nil {
+		resolver = func(context.Context) string { return "" }
+	}
+	identity := client.identity.get(ctx, resolver)
+
+	header.Set("Originator", config.CodexOriginator)
+	header.Set("User-Agent", identity.userAgent)
+	header.Set("Version", identity.version)
+	if header.Get("Session-Id") == "" {
+		header.Set("Session-Id", identity.sessionID)
+	}
+}
+
+func (client *Client) do(ctx context.Context, method string, targetURL *url.URL, header http.Header, body []byte) (*http.Response, error) {
 	effectiveAuth, err := client.ensureAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+effectiveAuth.AccessToken)
-	request.Header.Set("chatgpt-account-id", effectiveAuth.AccountID)
-	request.Header.Set("OpenAI-Beta", config.OpenAIBetaResponsesHeader)
+
+	request, err := client.newUpstreamRequest(ctx, method, targetURL, body, header, effectiveAuth)
+	if err != nil {
+		return nil, err
+	}
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
@@ -181,17 +225,10 @@ func (client *Client) do(ctx context.Context, method string, targetURL *url.URL,
 	}
 	closeBody(response.Body, "unauthorized upstream response body")
 
-	retryRequest, err := http.NewRequestWithContext(ctx, method, targetURL.String(), readerForBody(body))
+	retryRequest, err := client.newUpstreamRequest(ctx, method, targetURL, body, header, retryAuth)
 	if err != nil {
 		return nil, fmt.Errorf("create upstream retry request: %w", err)
 	}
-	copyHeaders(retryRequest.Header, header)
-	retryRequest.Header.Del("Authorization")
-	retryRequest.Header.Del("Chatgpt-Account-Id")
-	retryRequest.Header.Del("Openai-Beta")
-	retryRequest.Header.Set("Authorization", "Bearer "+retryAuth.AccessToken)
-	retryRequest.Header.Set("chatgpt-account-id", retryAuth.AccountID)
-	retryRequest.Header.Set("OpenAI-Beta", config.OpenAIBetaResponsesHeader)
 
 	retryResponse, err := client.httpClient.Do(retryRequest)
 	if err != nil {
@@ -199,6 +236,12 @@ func (client *Client) do(ctx context.Context, method string, targetURL *url.URL,
 	}
 
 	return retryResponse, nil
+}
+
+// SetVersionResolver wires lazy Codex CLI version resolution used for identity
+// headers; call once during handler construction, before serving traffic.
+func (client *Client) SetVersionResolver(resolver versionResolver) {
+	client.resolver = resolver
 }
 
 func (client *Client) ensureAuth(ctx context.Context) (auth.Effective, error) {
@@ -261,7 +304,26 @@ func authsEqualForRefresh(left, right auth.Effective) bool {
 type NormalizeOptions struct {
 	ForceStream  bool
 	Instructions string
-	Store        *bool
+}
+
+// codexOAuthUnsupportedParams are request fields the ChatGPT OAuth codex
+// endpoint rejects outright, so they must not be forwarded.
+var codexOAuthUnsupportedParams = []string{
+	"chat_template_kwargs",
+	"frequency_penalty",
+	"max_completion_tokens",
+	"max_output_tokens",
+	"metadata",
+	"presence_penalty",
+	"prompt_cache_retention",
+	"safety_identifier",
+	"stop",
+	"stop_sequences",
+	"stream_options",
+	"temperature",
+	"top_p",
+	"truncation",
+	"user",
 }
 
 func NormalizeResponsesBody(path string, header http.Header, body []byte, options NormalizeOptions) ([]byte, error) {
@@ -298,20 +360,24 @@ func NormalizeResponsesPayload(payload map[string]any, options NormalizeOptions)
 		normalized[key] = value
 	}
 
+	sanitizeResponsesPayload(normalized)
+
+	model, _ := normalized["model"].(string)
+	ApplyEffortAlias(normalized, model)
+
+	for _, key := range codexOAuthUnsupportedParams {
+		delete(normalized, key)
+	}
+
 	if _, ok := normalized["instructions"].(string); !ok {
 		normalized["instructions"] = options.Instructions
 	}
-	if _, ok := normalized["store"]; !ok {
-		if options.Store != nil {
-			normalized["store"] = *options.Store
-		} else {
-			normalized["store"] = false
-		}
-	}
+	// The ChatGPT internal endpoint refuses stored responses ("Store must be
+	// set to false"), so the field is forced rather than defaulted.
+	normalized["store"] = false
 	if options.ForceStream {
 		normalized["stream"] = true
 	}
-	delete(normalized, "max_output_tokens")
 
 	return normalized
 }

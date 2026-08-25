@@ -1,0 +1,16 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "content": "hi",
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "base\n\nYou are terse.",
+  "model": "gpt-5.2",
+  "store": false,
+  "stream": true
+}

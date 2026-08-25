@@ -1,0 +1,17 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "arguments": "{}",
+      "call_id": "fc_8efc5b9346b7851e275e4e1ab435b3b0cdf2fd9ff12fc719b1ac7dd65849f",
+      "name": "lookup",
+      "type": "function_call"
+    }
+  ],
+  "instructions": "",
+  "model": "gpt-5.2",
+  "store": false,
+  "stream": true
+}

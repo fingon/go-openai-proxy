@@ -1,0 +1,30 @@
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Look at",
+          "type": "input_text"
+        },
+        {
+          "image_url": "https://x.test/i.png",
+          "type": "input_image"
+        }
+      ],
+      "role": "developer",
+      "type": "message"
+    },
+    {
+      "content": "what is this",
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "Look at",
+  "model": "gpt-5.2",
+  "store": false,
+  "stream": true
+}
