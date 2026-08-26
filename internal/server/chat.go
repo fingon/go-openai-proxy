@@ -787,11 +787,18 @@ func usageFromResponse(response map[string]any) map[string]any {
 	rawUsage, _ := response["usage"].(map[string]any)
 	inputTokens := numberValue(rawUsage["input_tokens"])
 	outputTokens := numberValue(rawUsage["output_tokens"])
-	return map[string]any{
+	usage := map[string]any{
 		"completion_tokens": outputTokens,
 		"prompt_tokens":     inputTokens,
 		"total_tokens":      inputTokens + outputTokens,
 	}
+	if details, ok := rawUsage["input_tokens_details"].(map[string]any); ok {
+		usage["prompt_tokens_details"] = details
+	}
+	if details, ok := rawUsage["output_tokens_details"].(map[string]any); ok {
+		usage["completion_tokens_details"] = details
+	}
+	return usage
 }
 
 func numberValue(value any) float64 {

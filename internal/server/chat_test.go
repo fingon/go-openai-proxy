@@ -86,7 +86,7 @@ func TestChatStreamingParallelToolCallsAndUsage(t *testing.T) {
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":":1}"}`,
 		"",
 		"event: response.completed",
-		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":3}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":5},"output_tokens_details":{"reasoning_tokens":2}}}}`,
 		"",
 	}, "\n")
 	transport := &recordingTransport{}
@@ -125,6 +125,12 @@ func TestChatStreamingParallelToolCallsAndUsage(t *testing.T) {
 			usageSeen = true
 			assert.Assert(t, len(chunk["choices"].([]any)) == 0)
 			assert.Equal(t, usage["total_tokens"], float64(10))
+			promptDetails, ok := usage["prompt_tokens_details"].(map[string]any)
+			assert.Assert(t, ok, "streamed usage must carry prompt_tokens_details")
+			assert.Equal(t, promptDetails["cached_tokens"], float64(5))
+			completionDetails, ok := usage["completion_tokens_details"].(map[string]any)
+			assert.Assert(t, ok, "streamed usage must carry completion_tokens_details")
+			assert.Equal(t, completionDetails["reasoning_tokens"], float64(2))
 			continue
 		}
 		choices, _ := chunk["choices"].([]any)
@@ -169,6 +175,36 @@ func TestChatStreamingParallelToolCallsAndUsage(t *testing.T) {
 	assert.Equal(t, len(states[1].indices), 1)
 	assert.DeepEqual(t, finishReasons, []string{"tool_calls"})
 	assert.Assert(t, usageSeen)
+}
+
+func TestChatCompletionsUsageDetailsPassthrough(t *testing.T) {
+	transport := &recordingTransport{}
+	transport.handler = func(_ *http.Request, _ string) (*http.Response, error) {
+		return textResponse(http.StatusOK, strings.Join([]string{
+			"event: response.completed",
+			`data: {"response":{"id":"resp_1","status":"completed","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":9,"output_tokens":4,"input_tokens_details":{"cached_tokens":6},"output_tokens_details":{"reasoning_tokens":3}}}}`,
+			"",
+		}, "\n")), nil
+	}
+	handler := testHandler(t, transport, nil)
+
+	request := httptestPostJSON("/v1/chat/completions", `{"model":"gpt-5.2","messages":[{"role":"user","content":"hi"}]}`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	assert.Equal(t, response.Code, http.StatusOK)
+	var payload map[string]any
+	assert.NilError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	usage, ok := payload["usage"].(map[string]any)
+	assert.Assert(t, ok, payload["usage"])
+	assert.Equal(t, usage["prompt_tokens"], float64(9))
+	assert.Equal(t, usage["completion_tokens"], float64(4))
+	promptDetails, ok := usage["prompt_tokens_details"].(map[string]any)
+	assert.Assert(t, ok, "usage must carry prompt_tokens_details")
+	assert.Equal(t, promptDetails["cached_tokens"], float64(6))
+	completionDetails, ok := usage["completion_tokens_details"].(map[string]any)
+	assert.Assert(t, ok, "usage must carry completion_tokens_details")
+	assert.Equal(t, completionDetails["reasoning_tokens"], float64(3))
 }
 
 func TestChatStreamingTextDeltasIncrementally(t *testing.T) {
