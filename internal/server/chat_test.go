@@ -42,6 +42,56 @@ func TestChatCompletionsPromotesSystemMessages(t *testing.T) {
 	assert.Equal(t, len(input), 1)
 }
 
+func TestChatCompletionsConvertsJSONSchemaResponseFormat(t *testing.T) {
+	var upstreamBody string
+	transport := &recordingTransport{}
+	transport.handler = func(_ *http.Request, body string) (*http.Response, error) {
+		upstreamBody = body
+		return textResponse(http.StatusOK, strings.Join([]string{
+			"event: response.completed",
+			`data: {"response":{"id":"resp_1","status":"completed","output":[]}}`,
+			"",
+		}, "\n")), nil
+	}
+	handler := testHandler(t, transport, nil)
+
+	request := httptestPostJSON("/v1/chat/completions", `{
+		"model":"gpt-5.2",
+		"messages":[{"role":"user","content":"name this session"}],
+		"response_format":{
+			"type":"json_schema",
+			"json_schema":{
+				"name":"session_title",
+				"schema":{
+					"type":"object",
+					"properties":{"title":{"type":"string"}},
+					"required":["title"],
+					"additionalProperties":false
+				},
+				"strict":true
+			}
+		}
+	}`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	assert.Equal(t, response.Code, http.StatusOK)
+	var payload map[string]any
+	assert.NilError(t, json.Unmarshal([]byte(upstreamBody), &payload))
+	textFormat := payload["text"].(map[string]any)["format"].(map[string]any)
+	assert.Equal(t, textFormat["type"], responseFormatJSONSchema)
+	assert.Equal(t, textFormat["name"], "session_title")
+	assert.Equal(t, textFormat["strict"], true)
+	schema := textFormat["schema"].(map[string]any)
+	assert.Equal(t, schema["type"], "object")
+	assert.DeepEqual(t, schema["required"], []any{"title"})
+	assert.Equal(t, schema["additionalProperties"], false)
+	properties := schema["properties"].(map[string]any)
+	assert.DeepEqual(t, properties["title"], map[string]any{"type": "string"})
+	_, wrapped := textFormat[responseFormatJSONSchema]
+	assert.Assert(t, !wrapped)
+}
+
 func TestResponsesEndpointPromotesSystemMessages(t *testing.T) {
 	var upstreamBody string
 	transport := &recordingTransport{}

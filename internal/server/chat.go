@@ -67,6 +67,11 @@ type chatToolCallFunction struct {
 	Name      string `json:"name,omitempty"`
 }
 
+const (
+	responseFormatJSONObject = "json_object"
+	responseFormatJSONSchema = "json_schema"
+)
+
 func (handler *Handler) handleChatCompletions(responseWriter http.ResponseWriter, request *http.Request) {
 	body, err := readRequestBody(request)
 	if err != nil {
@@ -151,12 +156,13 @@ func responseFormatToTextFormat(value any) any {
 		return nil
 	}
 	switch format["type"] {
-	case "json_object":
-		return map[string]any{"format": map[string]any{"type": "json_object"}}
-	case "json_schema":
-		schema := map[string]any{"type": "json_schema"}
+	case responseFormatJSONObject:
+		return map[string]any{"format": map[string]any{"type": responseFormatJSONObject}}
+	case responseFormatJSONSchema:
+		schema := map[string]any{"type": responseFormatJSONSchema}
+		jsonSchema, _ := format[responseFormatJSONSchema].(map[string]any)
 		for _, key := range []string{"name", "schema", "strict", "description"} {
-			if entry, ok := format[key]; ok && entry != nil {
+			if entry, ok := jsonSchema[key]; ok && entry != nil {
 				schema[key] = entry
 			}
 		}
