@@ -14,6 +14,13 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const (
+	testEmptyCompletedResponseData      = `data: {"response":{"id":"resp_1","status":"completed","output":[]}}`
+	testEventFunctionCallArgumentsDelta = "event: response.function_call_arguments.delta"
+	testEventOutputItemDone             = "event: response.output_item.done"
+	testEventResponseCompleted          = "event: response.completed"
+)
+
 type recordingTransport struct {
 	requests []*http.Request
 	bodies   []string
@@ -32,7 +39,7 @@ func (transport *recordingTransport) RoundTrip(request *http.Request) (*http.Res
 }
 
 func TestHealthAndModels(t *testing.T) {
-	handler := testHandler(t, nil, []string{"gpt-5.2", "gpt-5.2", "gpt-5.3-codex"})
+	handler := testHandler(t, nil, []string{defaultChatModel, defaultChatModel, defaultCodexModel})
 
 	health := httptest.NewRecorder()
 	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -46,7 +53,7 @@ func TestHealthAndModels(t *testing.T) {
 }
 
 func TestModelRetrieve(t *testing.T) {
-	handler := testHandler(t, nil, []string{"gpt-5.2", "gpt-5.3-codex"})
+	handler := testHandler(t, nil, []string{defaultChatModel, defaultCodexModel})
 
 	found := httptest.NewRecorder()
 	handler.ServeHTTP(found, httptest.NewRequest(http.MethodGet, "/v1/models/gpt-5.3-codex", nil))
@@ -68,11 +75,11 @@ func TestResponsesAggregatesSSE(t *testing.T) {
 			"event: response.created",
 			`data: {"response":{"id":"resp_1","status":"in_progress"}}`,
 			"",
-			"event: response.output_item.done",
+			testEventOutputItemDone,
 			`data: {"output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","content":[{"type":"output_text","text":"proxy-ok"}],"role":"assistant"}}`,
 			"",
-			"event: response.completed",
-			`data: {"response":{"id":"resp_1","status":"completed","output":[]}}`,
+			testEventResponseCompleted,
+			testEmptyCompletedResponseData,
 			"",
 		}, "\n")), nil
 	}
@@ -106,10 +113,10 @@ func TestChatCompletionsAggregatesSSE(t *testing.T) {
 	transport.handler = func(request *http.Request, _ string) (*http.Response, error) {
 		assert.Equal(t, request.URL.Path, "/backend-api/codex/responses")
 		return textResponse(http.StatusOK, strings.Join([]string{
-			"event: response.output_item.done",
+			testEventOutputItemDone,
 			`data: {"output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","content":[{"type":"output_text","text":"proxy-ok"}],"role":"assistant"}}`,
 			"",
-			"event: response.completed",
+			testEventResponseCompleted,
 			`data: {"response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2}}}`,
 			"",
 		}, "\n")), nil

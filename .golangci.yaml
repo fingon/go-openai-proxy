@@ -26,6 +26,8 @@ linters:
     - wastedassign
     - whitespace
   settings:
+    goconst:
+      ignore-map-keys: true
     gocritic:
       disabled-checks:
         - captLocal
@@ -83,6 +85,7 @@ formatters:
     - goimports
   settings:
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
   exclusions:
     generated: lax

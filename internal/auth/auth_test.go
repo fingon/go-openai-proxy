@@ -18,19 +18,21 @@ import (
 
 type roundTripFunc func(request *http.Request) (*http.Response, error)
 
+const testAccountID = "acct-1"
+
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
 }
 
 func TestParseJWTClaimsAndDeriveAccountID(t *testing.T) {
 	token := testJWT(map[string]any{
-		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1"},
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": testAccountID},
 	})
 
 	claims, ok := ParseJWTClaims(token)
 	assert.Assert(t, ok)
-	assert.Equal(t, claims["https://api.openai.com/auth"].(map[string]any)["chatgpt_account_id"], "acct-1")
-	assert.Equal(t, DeriveAccountID(token), "acct-1")
+	assert.Equal(t, claims["https://api.openai.com/auth"].(map[string]any)["chatgpt_account_id"], testAccountID)
+	assert.Equal(t, DeriveAccountID(token), testAccountID)
 }
 
 func TestLoadReturnsStoredTokens(t *testing.T) {

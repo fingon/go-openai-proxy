@@ -16,10 +16,10 @@ func TestChatCompletionsPromotesSystemMessages(t *testing.T) {
 	transport.handler = func(_ *http.Request, body string) (*http.Response, error) {
 		upstreamBody = body
 		return textResponse(http.StatusOK, strings.Join([]string{
-			"event: response.output_item.done",
+			testEventOutputItemDone,
 			`data: {"output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","content":[{"type":"output_text","text":"ok"}],"role":"assistant"}}`,
 			"",
-			"event: response.completed",
+			testEventResponseCompleted,
 			`data: {"response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
 			"",
 		}, "\n")), nil
@@ -48,8 +48,8 @@ func TestChatCompletionsConvertsJSONSchemaResponseFormat(t *testing.T) {
 	transport.handler = func(_ *http.Request, body string) (*http.Response, error) {
 		upstreamBody = body
 		return textResponse(http.StatusOK, strings.Join([]string{
-			"event: response.completed",
-			`data: {"response":{"id":"resp_1","status":"completed","output":[]}}`,
+			testEventResponseCompleted,
+			testEmptyCompletedResponseData,
 			"",
 		}, "\n")), nil
 	}
@@ -99,8 +99,8 @@ func TestResponsesEndpointPromotesSystemMessages(t *testing.T) {
 		assert.Equal(t, request.URL.Path, "/backend-api/codex/responses")
 		upstreamBody = body
 		return textResponse(http.StatusOK, strings.Join([]string{
-			"event: response.completed",
-			`data: {"response":{"id":"resp_1","status":"completed","output":[]}}`,
+			testEventResponseCompleted,
+			testEmptyCompletedResponseData,
 			"",
 		}, "\n")), nil
 	}
@@ -126,16 +126,16 @@ func TestChatStreamingParallelToolCallsAndUsage(t *testing.T) {
 		"event: response.output_item.added",
 		`data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_b","call_id":"fc_callb","type":"function_call","name":"fetch","arguments":""}}`,
 		"",
-		"event: response.function_call_arguments.delta",
+		testEventFunctionCallArgumentsDelta,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":"{\"q\""}`,
 		"",
-		"event: response.function_call_arguments.delta",
+		testEventFunctionCallArgumentsDelta,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":1,"delta":"{}"}`,
 		"",
-		"event: response.function_call_arguments.delta",
+		testEventFunctionCallArgumentsDelta,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":0,"delta":":1}"}`,
 		"",
-		"event: response.completed",
+		testEventResponseCompleted,
 		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":5},"output_tokens_details":{"reasoning_tokens":2}}}}`,
 		"",
 	}, "\n")
@@ -231,7 +231,7 @@ func TestChatCompletionsUsageDetailsPassthrough(t *testing.T) {
 	transport := &recordingTransport{}
 	transport.handler = func(_ *http.Request, _ string) (*http.Response, error) {
 		return textResponse(http.StatusOK, strings.Join([]string{
-			"event: response.completed",
+			testEventResponseCompleted,
 			`data: {"response":{"id":"resp_1","status":"completed","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":9,"output_tokens":4,"input_tokens_details":{"cached_tokens":6},"output_tokens_details":{"reasoning_tokens":3}}}}`,
 			"",
 		}, "\n")), nil
@@ -265,7 +265,7 @@ func TestChatStreamingTextDeltasIncrementally(t *testing.T) {
 		"event: response.output_text.delta",
 		`data: {"type":"response.output_text.delta","delta":"lo"}`,
 		"",
-		"event: response.completed",
+		testEventResponseCompleted,
 		`data: {"type":"response.completed","response":{"status":"completed","output":[]}}`,
 		"",
 	}, "\n")
@@ -310,8 +310,8 @@ func TestLegacyFunctionsAreConverted(t *testing.T) {
 	transport.handler = func(_ *http.Request, body string) (*http.Response, error) {
 		upstreamBody = body
 		return textResponse(http.StatusOK, strings.Join([]string{
-			"event: response.completed",
-			`data: {"response":{"id":"resp_1","status":"completed","output":[]}}`,
+			testEventResponseCompleted,
+			testEmptyCompletedResponseData,
 			"",
 		}, "\n")), nil
 	}

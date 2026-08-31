@@ -8,6 +8,11 @@ import (
 	"gotest.tools/v3/golden"
 )
 
+const (
+	testCodexModel             = "gpt-5.3-codex"
+	testMinimumIdentityVersion = "0.144.0"
+)
+
 func normalizeToJSON(t *testing.T, payload string) string {
 	t.Helper()
 
@@ -82,11 +87,11 @@ func TestSplitEffortSuffix(t *testing.T) {
 		wantModel  string
 		wantEffort string
 	}{
-		{model: "gpt-5.3-codex-high", wantModel: "gpt-5.3-codex", wantEffort: "high"},
+		{model: "gpt-5.3-codex-high", wantModel: testCodexModel, wantEffort: "high"},
 		{model: "gpt-5.4-none", wantModel: "gpt-5.4", wantEffort: "minimal"},
-		{model: "gpt-5.3-codex-xhigh", wantModel: "gpt-5.3-codex", wantEffort: "xhigh"},
+		{model: "gpt-5.3-codex-xhigh", wantModel: testCodexModel, wantEffort: "xhigh"},
 		{model: "gpt-5.2", wantModel: "gpt-5.2"},
-		{model: "gpt-5.3-codex", wantModel: "gpt-5.3-codex"},
+		{model: testCodexModel, wantModel: testCodexModel},
 		{model: "", wantModel: ""},
 	} {
 		gotModel, gotEffort := SplitEffortSuffix(testCase.model)
@@ -108,11 +113,11 @@ func TestClampIdentityVersion(t *testing.T) {
 		want    string
 	}{
 		{version: "0.150.0", want: "0.150.0"},
-		{version: "0.144.0", want: "0.144.0"},
-		{version: "0.100.0", want: "0.144.0"},
+		{version: testMinimumIdentityVersion, want: testMinimumIdentityVersion},
+		{version: "0.100.0", want: testMinimumIdentityVersion},
 		{version: "1.2.3-alpha.4", want: "1.2.3-alpha.4"},
 		{version: "garbage", want: "0.144.0"},
-		{version: "", want: "0.144.0"},
+		{version: "", want: testMinimumIdentityVersion},
 	} {
 		assert.Equal(t, clampIdentityVersion(testCase.version), testCase.want, testCase.version)
 	}

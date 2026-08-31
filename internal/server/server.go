@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	defaultChatModel = "gpt-5.2"
-	modelsPathPrefix = "/v1/models/"
-	proxyOwner       = "codex-oauth"
+	defaultChatModel  = "gpt-5.2"
+	defaultCodexModel = "gpt-5.3-codex"
+	modelsPathPrefix  = "/v1/models/"
+	proxyOwner        = "codex-oauth"
 )
 
 var (

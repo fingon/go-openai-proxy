@@ -68,8 +68,12 @@ type chatToolCallFunction struct {
 }
 
 const (
-	responseFormatJSONObject = "json_object"
-	responseFormatJSONSchema = "json_schema"
+	chatCompletionChunkObject = "chat.completion.chunk"
+	chatRoleAssistant         = "assistant"
+	chatToolTypeFunction      = "function"
+	responsesInputTextType    = "input_text"
+	responseFormatJSONObject  = "json_object"
+	responseFormatJSONSchema  = "json_schema"
 )
 
 func (handler *Handler) handleChatCompletions(responseWriter http.ResponseWriter, request *http.Request) {
@@ -186,7 +190,7 @@ func convertFunctionCallToToolChoice(value any) any {
 		if name == "" {
 			return nil
 		}
-		return map[string]any{"name": name, "type": "function"}
+		return map[string]any{"name": name, "type": chatToolTypeFunction}
 	default:
 		return nil
 	}
@@ -210,11 +214,11 @@ func (chat chatRequest) toResponsesInput() []any {
 				"output":  stringifyContent(message.Content),
 				"type":    "function_call_output",
 			})
-		case "assistant":
+		case chatRoleAssistant:
 			if text := assistantText(message); text != "" {
 				input = append(input, map[string]any{
 					"content": []any{map[string]any{"text": text, "type": "output_text"}},
-					"role":    "assistant",
+					"role":    chatRoleAssistant,
 					"type":    "message",
 				})
 			}
@@ -263,14 +267,14 @@ func assistantText(message chatMessage) string {
 func (chat chatRequest) toResponsesTools() []any {
 	tools := make([]any, 0, len(chat.Tools)+len(chat.Functions))
 	for _, tool := range chat.Tools {
-		if tool.Type != "function" || tool.Function.Name == "" {
+		if tool.Type != chatToolTypeFunction || tool.Function.Name == "" {
 			continue
 		}
 		tools = append(tools, map[string]any{
 			"description": tool.Function.Description,
 			"name":        tool.Function.Name,
 			"parameters":  toolParameters(tool.Function),
-			"type":        "function",
+			"type":        chatToolTypeFunction,
 		})
 	}
 	// Legacy functions[] entries are plain function definitions.
@@ -282,7 +286,7 @@ func (chat chatRequest) toResponsesTools() []any {
 			"description": function.Description,
 			"name":        function.Name,
 			"parameters":  toolParameters(function),
-			"type":        "function",
+			"type":        chatToolTypeFunction,
 		})
 	}
 
@@ -312,7 +316,7 @@ func toInputContent(content any) []any {
 		if text == "" {
 			return []any{}
 		}
-		return []any{map[string]any{"text": text, "type": "input_text"}}
+		return []any{map[string]any{"text": text, "type": responsesInputTextType}}
 	}
 
 	converted := make([]any, 0, len(parts))
@@ -320,13 +324,13 @@ func toInputContent(content any) []any {
 		switch typedPart := part.(type) {
 		case string:
 			if typedPart != "" {
-				converted = append(converted, map[string]any{"text": typedPart, "type": "input_text"})
+				converted = append(converted, map[string]any{"text": typedPart, "type": responsesInputTextType})
 			}
 		case map[string]any:
 			switch partType, _ := typedPart["type"].(string); partType {
 			case "", "text":
 				if text, ok := typedPart["text"].(string); ok && text != "" {
-					converted = append(converted, map[string]any{"text": text, "type": "input_text"})
+					converted = append(converted, map[string]any{"text": text, "type": responsesInputTextType})
 				}
 			case "image_url":
 				if imageURL := extractImageURL(typedPart["image_url"]); imageURL != "" {
@@ -334,13 +338,13 @@ func toInputContent(content any) []any {
 				}
 			case "input_image":
 				converted = append(converted, typedPart)
-			case "input_text":
+			case responsesInputTextType:
 				converted = append(converted, typedPart)
 			default:
 				// Other modalities are not supported by this endpoint; their
 				// text form is preserved so nothing disappears silently.
 				if text := stringifyContent(typedPart); text != "" && text != "{}" {
-					converted = append(converted, map[string]any{"text": text, "type": "input_text"})
+					converted = append(converted, map[string]any{"text": text, "type": responsesInputTextType})
 				}
 			}
 		}
@@ -399,7 +403,7 @@ func toChatCompletion(response map[string]any, request chatRequest) map[string]a
 	toolCalls := extractToolCalls(response)
 	message := map[string]any{
 		"content": extractText(response),
-		"role":    "assistant",
+		"role":    chatRoleAssistant,
 	}
 	if len(toolCalls) > 0 {
 		message["content"] = nil
@@ -435,11 +439,11 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 	}
 
 	writeChatSSE(responseWriter, map[string]any{
-		"choices": []any{map[string]any{"delta": map[string]any{"role": "assistant"}, "finish_reason": nil, "index": 0}},
+		"choices": []any{map[string]any{"delta": map[string]any{"role": chatRoleAssistant}, "finish_reason": nil, "index": 0}},
 		"created": created,
 		"id":      id,
 		"model":   model,
-		"object":  "chat.completion.chunk",
+		"object":  chatCompletionChunkObject,
 	})
 	if flusher != nil {
 		flusher.Flush()
@@ -474,7 +478,7 @@ func (handler *Handler) streamChatResponse(responseWriter http.ResponseWriter, u
 			"created": created,
 			"id":      id,
 			"model":   model,
-			"object":  "chat.completion.chunk",
+			"object":  chatCompletionChunkObject,
 			"usage":   finalUsage,
 		})
 		if flusher != nil {
@@ -607,8 +611,8 @@ func (tracker *streamedToolCallTracker) argumentsDeltaChunk(payload map[string]a
 
 	return []any{chatDeltaChunk(id, created, model, map[string]any{
 		"tool_calls": []any{map[string]any{
-			"function": map[string]any{"arguments": delta},
-			"index":    call.chatIndex,
+			chatToolTypeFunction: map[string]any{"arguments": delta},
+			"index":              call.chatIndex,
 		}},
 	}, nil)}
 }
@@ -629,10 +633,10 @@ func (tracker *streamedToolCallTracker) itemAddedChunks(payload map[string]any, 
 
 	return []any{chatDeltaChunk(id, created, model, map[string]any{
 		"tool_calls": []any{map[string]any{
-			"function": map[string]any{"name": name},
-			"id":       stringValueFrom(item["call_id"]),
-			"index":    call.chatIndex,
-			"type":     "function",
+			chatToolTypeFunction: map[string]any{"name": name},
+			"id":                 stringValueFrom(item["call_id"]),
+			"index":              call.chatIndex,
+			"type":               chatToolTypeFunction,
 		}},
 	}, nil)}
 }
@@ -658,10 +662,10 @@ func (tracker *streamedToolCallTracker) itemDoneChunks(payload map[string]any, i
 
 	return []any{chatDeltaChunk(id, created, model, map[string]any{
 		"tool_calls": []any{map[string]any{
-			"function": map[string]any{"arguments": arguments},
-			"id":       stringValueFrom(item["call_id"]),
-			"index":    call.chatIndex,
-			"type":     "function",
+			chatToolTypeFunction: map[string]any{"arguments": arguments},
+			"id":                 stringValueFrom(item["call_id"]),
+			"index":              call.chatIndex,
+			"type":               chatToolTypeFunction,
 		}},
 	}, nil)}
 }
@@ -688,7 +692,7 @@ func chatDeltaChunk(id string, created int64, model string, delta map[string]any
 		"created": created,
 		"id":      id,
 		"model":   model,
-		"object":  "chat.completion.chunk",
+		"object":  chatCompletionChunkObject,
 	}
 }
 
@@ -746,13 +750,13 @@ func extractToolCalls(response map[string]any) []any {
 			continue
 		}
 		toolCalls = append(toolCalls, map[string]any{
-			"function": map[string]any{
+			chatToolTypeFunction: map[string]any{
 				"arguments": itemMap["arguments"],
 				"name":      itemMap["name"],
 			},
 			"id":    itemMap["call_id"],
 			"index": index,
-			"type":  "function",
+			"type":  chatToolTypeFunction,
 		})
 	}
 

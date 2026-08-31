@@ -13,8 +13,9 @@ const (
 )
 
 const (
-	roleDeveloper = "developer"
-	roleSystem    = "system"
+	itemTypeMessage = "message"
+	roleDeveloper   = "developer"
+	roleSystem      = "system"
 )
 
 var legacyCallIDPrefixes = []string{"call_", "ctc_", "tsc_"}
@@ -63,7 +64,7 @@ func coerceStringInput(payload map[string]any) bool {
 		payload["input"] = []any{map[string]any{
 			"content": text,
 			"role":    "user",
-			"type":    "message",
+			"type":    itemTypeMessage,
 		}}
 	}
 
@@ -113,7 +114,7 @@ func sanitizeInputItems(input []any, payload map[string]any) ([]any, bool) {
 
 func isPromotableRole(item map[string]any) bool {
 	itemType, _ := item["type"].(string)
-	if itemType != "" && itemType != "message" {
+	if itemType != "" && itemType != itemTypeMessage {
 		return false
 	}
 	switch role, _ := item["role"].(string); role {
@@ -168,7 +169,7 @@ func normalizeCallIDs(item map[string]any) bool {
 
 	if _, ok := codexToolCallItemTypes[itemType]; !ok {
 		// Message-like items must not carry call ids.
-		if _, ok := item["call_id"]; ok && itemType != "" && itemType != "message" {
+		if _, ok := item["call_id"]; ok && itemType != "" && itemType != itemTypeMessage {
 			delete(item, "call_id")
 			return true
 		}

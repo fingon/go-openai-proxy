@@ -19,15 +19,15 @@ func TestUpstreamRequestCarriesIdentityHeaders(t *testing.T) {
 	})
 	authPath := writeTestAuthFile(t, map[string]any{
 		"tokens": map[string]any{
-			"access_token":  "access",
-			"account_id":    "acct-1",
-			"refresh_token": "refresh-1",
+			"access_token":  testAccessToken,
+			"account_id":    testAccountID,
+			"refresh_token": testRefreshToken,
 		},
 	})
 
 	client, err := NewClient(Options{
 		AuthFilePath:    authPath,
-		BaseURL:         "https://codex.example.test",
+		BaseURL:         testCodexBaseURL,
 		Client:          &http.Client{Transport: transport},
 		VersionResolver: func(context.Context) string { return "0.150.1" },
 	})
@@ -46,8 +46,8 @@ func TestUpstreamRequestCarriesIdentityHeaders(t *testing.T) {
 	assert.Equal(t, captured.Get("Version"), "0.150.1")
 	assert.Assert(t, strings.HasPrefix(captured.Get("User-Agent"), config.CodexOriginator+"/0.150.1 ("))
 	assert.Equal(t, captured.Get("Session-Id"), "client-session")
-	assert.Equal(t, captured.Get("Authorization"), "Bearer access")
-	assert.Equal(t, captured.Get("chatgpt-account-id"), "acct-1")
+	assert.Equal(t, captured.Get("Authorization"), "Bearer "+testAccessToken)
+	assert.Equal(t, captured.Get("chatgpt-account-id"), testAccountID)
 	assert.Equal(t, captured.Get("OpenAI-Beta"), config.OpenAIBetaResponsesHeader)
 	_, hasAcceptEncoding := captured["Accept-Encoding"]
 	assert.Assert(t, !hasAcceptEncoding)
@@ -61,15 +61,15 @@ func TestUpstreamRequestGeneratesSessionIDAndClampsVersion(t *testing.T) {
 	})
 	authPath := writeTestAuthFile(t, map[string]any{
 		"tokens": map[string]any{
-			"access_token":  "access",
-			"account_id":    "acct-1",
-			"refresh_token": "refresh-1",
+			"access_token":  testAccessToken,
+			"account_id":    testAccountID,
+			"refresh_token": testRefreshToken,
 		},
 	})
 
 	client, err := NewClient(Options{
 		AuthFilePath:    authPath,
-		BaseURL:         "https://codex.example.test",
+		BaseURL:         testCodexBaseURL,
 		Client:          &http.Client{Transport: transport},
 		VersionResolver: func(context.Context) string { return "0.20.0" },
 	})
@@ -97,15 +97,15 @@ func TestRawRequestWithoutResolverUsesFallbackVersion(t *testing.T) {
 	})
 	authPath := writeTestAuthFile(t, map[string]any{
 		"tokens": map[string]any{
-			"access_token":  "access",
-			"account_id":    "acct-1",
-			"refresh_token": "refresh-1",
+			"access_token":  testAccessToken,
+			"account_id":    testAccountID,
+			"refresh_token": testRefreshToken,
 		},
 	})
 
 	client, err := NewClient(Options{
 		AuthFilePath: authPath,
-		BaseURL:      "https://codex.example.test",
+		BaseURL:      testCodexBaseURL,
 		Client:       &http.Client{Transport: transport},
 	})
 	assert.NilError(t, err)

@@ -155,7 +155,7 @@ func liveModel(t *testing.T, body []byte) string {
 	assert.NilError(t, json.Unmarshal(body, &response))
 
 	for _, model := range response.Data {
-		if model.ID == "gpt-5.3-codex" {
+		if model.ID == defaultCodexModel {
 			return model.ID
 		}
 	}

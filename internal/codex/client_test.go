@@ -18,8 +18,13 @@ import (
 )
 
 const (
-	testAuthTokenURL      = "https://auth.example.test/token"
-	testCodexResponsesURL = "https://codex.example.test/responses"
+	testAccessToken         = "access"
+	testAccountID           = "acct-1"
+	testAuthTokenURL        = "https://auth.example.test/token"
+	testChatGPTResponsesURL = "https://chatgpt.com/backend-api/codex/responses?foo=bar"
+	testCodexBaseURL        = "https://codex.example.test"
+	testCodexResponsesURL   = testCodexBaseURL + "/responses"
+	testRefreshToken        = "refresh-1"
 )
 
 func TestResolveTargetURL(t *testing.T) {
@@ -31,8 +36,8 @@ func TestResolveTargetURL(t *testing.T) {
 		want  string
 	}{
 		{input: "responses", want: "https://chatgpt.com/backend-api/codex/responses"},
-		{input: "/v1/responses?foo=bar", want: "https://chatgpt.com/backend-api/codex/responses?foo=bar"},
-		{input: "https://chatgpt.com/backend-api/codex/responses?foo=bar", want: "https://chatgpt.com/backend-api/codex/responses?foo=bar"},
+		{input: "/v1/responses?foo=bar", want: testChatGPTResponsesURL},
+		{input: testChatGPTResponsesURL, want: testChatGPTResponsesURL},
 	} {
 		target, err := client.ResolveTargetURL(testCase.input)
 		assert.NilError(t, err)
@@ -70,8 +75,8 @@ func TestRefreshesExpiredCachedAuthOnceForConcurrentRequests(t *testing.T) {
 		"last_refresh": "2020-01-01T00:00:00Z",
 		"tokens": map[string]any{
 			"access_token":  expiredAccessToken,
-			"account_id":    "acct-1",
-			"refresh_token": "refresh-1",
+			"account_id":    testAccountID,
+			"refresh_token": testRefreshToken,
 		},
 	})
 
@@ -96,7 +101,7 @@ func TestRefreshesExpiredCachedAuthOnceForConcurrentRequests(t *testing.T) {
 	})
 	client, err := NewClient(Options{
 		AuthFilePath: authPath,
-		BaseURL:      "https://codex.example.test",
+		BaseURL:      testCodexBaseURL,
 		Client:       &http.Client{Transport: transport},
 		EnsureFresh:  true,
 		TokenURL:     testAuthTokenURL,
@@ -130,8 +135,8 @@ func TestUnauthorizedRecoveryReloadsSameAccountAuthWithoutNetworkRefresh(t *test
 	authPath := writeTestAuthFile(t, map[string]any{
 		"tokens": map[string]any{
 			"access_token":  "old-access",
-			"account_id":    "acct-1",
-			"refresh_token": "refresh-1",
+			"account_id":    testAccountID,
+			"refresh_token": testRefreshToken,
 		},
 	})
 
@@ -145,7 +150,7 @@ func TestUnauthorizedRecoveryReloadsSameAccountAuthWithoutNetworkRefresh(t *test
 				updated := map[string]any{
 					"tokens": map[string]any{
 						"access_token":  "new-access",
-						"account_id":    "acct-1",
+						"account_id":    testAccountID,
 						"refresh_token": "refresh-2",
 					},
 				}
@@ -167,7 +172,7 @@ func TestUnauthorizedRecoveryReloadsSameAccountAuthWithoutNetworkRefresh(t *test
 
 	client, err := NewClient(Options{
 		AuthFilePath: authPath,
-		BaseURL:      "https://codex.example.test",
+		BaseURL:      testCodexBaseURL,
 		Client:       &http.Client{Transport: transport},
 		EnsureFresh:  true,
 		NoRefresh:    true,
@@ -188,8 +193,8 @@ func TestNoRefreshDoesNotCallRefreshEndpointAfterUnauthorized(t *testing.T) {
 	authPath := writeTestAuthFile(t, map[string]any{
 		"tokens": map[string]any{
 			"access_token":  "old-access",
-			"account_id":    "acct-1",
-			"refresh_token": "refresh-1",
+			"account_id":    testAccountID,
+			"refresh_token": testRefreshToken,
 		},
 	})
 
@@ -210,7 +215,7 @@ func TestNoRefreshDoesNotCallRefreshEndpointAfterUnauthorized(t *testing.T) {
 
 	client, err := NewClient(Options{
 		AuthFilePath: authPath,
-		BaseURL:      "https://codex.example.test",
+		BaseURL:      testCodexBaseURL,
 		Client:       &http.Client{Transport: transport},
 		EnsureFresh:  true,
 		NoRefresh:    true,
