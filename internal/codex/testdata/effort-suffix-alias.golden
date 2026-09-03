@@ -10,7 +10,7 @@
     }
   ],
   "instructions": "",
-  "model": "gpt-5.3-codex-high",
+  "model": "gpt-5.3-codex",
   "reasoning": {
     "effort": "high"
   },

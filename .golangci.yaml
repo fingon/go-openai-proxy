@@ -77,6 +77,9 @@ linters:
       - path: internal/server/chat.go
         linters:
           - tagliatelle
+      - path: internal/models/models.go
+        linters:
+          - tagliatelle
 
 formatters:
   enable:

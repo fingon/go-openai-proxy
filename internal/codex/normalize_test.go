@@ -9,7 +9,10 @@ import (
 )
 
 const (
+	testCombinedFastAlias      = "gpt-5.4-high-fast"
 	testCodexModel             = "gpt-5.3-codex"
+	testGPT54Model             = "gpt-5.4"
+	testHighEffort             = "high"
 	testMinimumIdentityVersion = "0.144.0"
 )
 
@@ -81,30 +84,87 @@ func TestNormalizeResponsesPayload(t *testing.T) {
 	}
 }
 
-func TestSplitEffortSuffix(t *testing.T) {
+func TestParseModelAlias(t *testing.T) {
 	for _, testCase := range []struct {
 		model      string
 		wantModel  string
 		wantEffort string
+		wantFast   bool
 	}{
-		{model: "gpt-5.3-codex-high", wantModel: testCodexModel, wantEffort: "high"},
-		{model: "gpt-5.4-none", wantModel: "gpt-5.4", wantEffort: "minimal"},
+		{model: "gpt-5.3-codex-high", wantModel: testCodexModel, wantEffort: testHighEffort},
+		{model: "gpt-5.4-none", wantModel: testGPT54Model, wantEffort: "none"},
 		{model: "gpt-5.3-codex-xhigh", wantModel: testCodexModel, wantEffort: "xhigh"},
+		{model: "gpt-5.4-max", wantModel: testGPT54Model, wantEffort: "max"},
+		{model: "gpt-5.4-fast", wantModel: testGPT54Model, wantFast: true},
+		{model: testCombinedFastAlias, wantModel: testGPT54Model, wantEffort: testHighEffort, wantFast: true},
+		{model: "gpt-5.4-ultra", wantModel: "gpt-5.4-ultra"},
+		{model: "gpt-5.4-persistent", wantModel: "gpt-5.4-persistent"},
 		{model: "gpt-5.2", wantModel: "gpt-5.2"},
 		{model: testCodexModel, wantModel: testCodexModel},
 		{model: "", wantModel: ""},
 	} {
-		gotModel, gotEffort := SplitEffortSuffix(testCase.model)
-		assert.Equal(t, gotModel, testCase.wantModel, testCase.model)
-		assert.Equal(t, gotEffort, testCase.wantEffort, testCase.model)
+		alias := ParseModelAlias(testCase.model)
+		assert.Equal(t, alias.Model, testCase.wantModel, testCase.model)
+		assert.Equal(t, alias.Effort, testCase.wantEffort, testCase.model)
+		assert.Equal(t, alias.Fast, testCase.wantFast, testCase.model)
 	}
 }
 
-func TestApplyEffortAliasKeepsExplicitReasoning(t *testing.T) {
-	payload := map[string]any{
-		"reasoning": map[string]any{"effort": "low"},
+func TestApplyModelAlias(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		model   string
+		payload map[string]any
+		want    map[string]any
+	}{
+		{
+			name:    "combined alias",
+			model:   testCombinedFastAlias,
+			payload: map[string]any{"model": testCombinedFastAlias},
+			want: map[string]any{
+				"model":        testGPT54Model,
+				"reasoning":    map[string]any{"effort": testHighEffort},
+				"service_tier": PriorityServiceTier,
+			},
+		},
+		{
+			name:  "merges with reasoning controls",
+			model: testGPT54Model + "-" + testHighEffort,
+			payload: map[string]any{
+				"model":     testGPT54Model + "-" + testHighEffort,
+				"reasoning": map[string]any{"summary": "auto"},
+			},
+			want: map[string]any{
+				"model":     testGPT54Model,
+				"reasoning": map[string]any{"effort": testHighEffort, "summary": "auto"},
+			},
+		},
+		{
+			name:  "explicit settings win",
+			model: testCombinedFastAlias,
+			payload: map[string]any{
+				"model":        testCombinedFastAlias,
+				"reasoning":    map[string]any{"effort": "low"},
+				"service_tier": "default",
+			},
+			want: map[string]any{
+				"model":        testGPT54Model,
+				"reasoning":    map[string]any{"effort": "low"},
+				"service_tier": "default",
+			},
+		},
+		{
+			name:    "normalizes explicit fast tier",
+			model:   testGPT54Model,
+			payload: map[string]any{"model": testGPT54Model, "service_tier": "fast"},
+			want:    map[string]any{"model": testGPT54Model, "service_tier": PriorityServiceTier},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ApplyModelAlias(testCase.payload, testCase.model)
+			assert.DeepEqual(t, testCase.payload, testCase.want)
+		})
 	}
-	assert.Assert(t, !ApplyEffortAlias(payload, "gpt-5.3-codex-high"))
 }
 
 func TestClampIdentityVersion(t *testing.T) {

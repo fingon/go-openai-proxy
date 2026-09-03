@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -40,6 +41,68 @@ func TestResolveExcludesConfiguredModels(t *testing.T) {
 	resolved, err := resolver.Resolve(context.Background())
 	assert.NilError(t, err)
 	assert.DeepEqual(t, resolved, []string{includedModel})
+}
+
+func TestCatalogModelsExpandsSupportedAliases(t *testing.T) {
+	var response catalogResponse
+	assert.NilError(t, json.Unmarshal([]byte(`{
+		"models":[
+			{
+				"slug":"gpt-priority",
+				"supported_reasoning_levels":[
+					{"effort":"low"},
+					{"effort":"high"},
+					{"effort":"ultra"},
+					{"effort":"high"}
+				],
+				"service_tiers":[{"id":"priority"}]
+			},
+			{
+				"slug":"gpt-standard",
+				"supported_reasoning_levels":[{"effort":"medium"},{"effort":"persistent"}]
+			},
+			{
+				"slug":"gpt-legacy",
+				"supported_reasoning_levels":[{"effort":"max"}],
+				"additional_speed_tiers":["fast"]
+			},
+			{"slug":"gpt-excluded","supported_reasoning_levels":[{"effort":"low"}]},
+			{"slug":"gpt-priority","supported_reasoning_levels":[{"effort":"low"}]}
+		]
+	}`), &response))
+
+	resolved, found := catalogModels(response.Models, []string{"gpt-standard-medium", "gpt-excluded"})
+	assert.Assert(t, found)
+	assert.DeepEqual(t, resolved, []string{
+		"gpt-priority",
+		"gpt-priority-low",
+		"gpt-priority-high",
+		"gpt-priority-fast",
+		"gpt-priority-low-fast",
+		"gpt-priority-high-fast",
+		"gpt-standard",
+		"gpt-legacy",
+		"gpt-legacy-max",
+		"gpt-legacy-fast",
+		"gpt-legacy-max-fast",
+	})
+}
+
+func TestCatalogModelsReportsWhetherCatalogContainsModels(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		input []catalogModel
+		want  bool
+	}{
+		{name: "empty catalog"},
+		{name: "blank slug", input: []catalogModel{{Slug: " "}}},
+		{name: "excluded model", input: []catalogModel{{Slug: "gpt-5.4"}}, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, found := catalogModels(testCase.input, []string{"gpt-5.4"})
+			assert.Equal(t, found, testCase.want)
+		})
+	}
 }
 
 func TestCodexClientVersionUsesInstalledCLI(t *testing.T) {

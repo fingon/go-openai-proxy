@@ -42,6 +42,35 @@ func TestChatCompletionsPromotesSystemMessages(t *testing.T) {
 	assert.Equal(t, len(input), 1)
 }
 
+func TestChatCompletionsAppliesModelEffortAndFastAliases(t *testing.T) {
+	var upstreamBody string
+	transport := &recordingTransport{}
+	transport.handler = func(_ *http.Request, body string) (*http.Response, error) {
+		upstreamBody = body
+		return textResponse(http.StatusOK, strings.Join([]string{
+			testEventResponseCompleted,
+			testEmptyCompletedResponseData,
+			"",
+		}, "\n")), nil
+	}
+	handler := testHandler(t, transport, nil)
+
+	request := httptestPostJSON(
+		"/v1/chat/completions",
+		`{"model":"gpt-5.4-high-fast","service_tier":"fast","messages":[{"role":"user","content":"hi"}]}`,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	assert.Equal(t, response.Code, http.StatusOK)
+	var payload map[string]any
+	assert.NilError(t, json.Unmarshal([]byte(upstreamBody), &payload))
+	assert.Equal(t, payload["model"], "gpt-5.4")
+	assert.Equal(t, payload["service_tier"], "priority")
+	reasoning := payload["reasoning"].(map[string]any)
+	assert.Equal(t, reasoning["effort"], "high")
+}
+
 func TestChatCompletionsConvertsJSONSchemaResponseFormat(t *testing.T) {
 	var upstreamBody string
 	transport := &recordingTransport{}

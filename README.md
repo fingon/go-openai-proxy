@@ -98,8 +98,12 @@ The ChatGPT OAuth codex endpoint is stricter than the public Responses API, so b
 - Parameters rejected by the OAuth endpoint are dropped: `temperature`, `top_p`, `stop`, `frequency_penalty`, `presence_penalty`, `max_tokens`, `max_completion_tokens`, `max_output_tokens`, `user`, `metadata`, `stream_options`, `truncation`, `safety_identifier`.
 - String `input` values become message arrays; `role:"tool"` rows become `function_call_output` items; legacy Chat Completions `functions`/`function_call` map to `tools`/`tool_choice`.
 - Function/tool call ids are normalized to the upstream-required `fc_` prefix; replayed `reasoning` items lose their server-side ids and get a required empty `summary`, while `reasoning.encrypted_content` is requested so multi-turn reasoning context survives with `store=false`.
-- Model ids with an effort variant suffix such as `gpt-5.3-codex-high` set the matching `reasoning.effort` unless reasoning was already specified.
+- Automatically discovered models include virtual effort and Fast variants based on the capabilities advertised by Codex. For example, `gpt-5.4-high-fast` forwards `model:"gpt-5.4"`, `reasoning.effort:"high"`, and `service_tier:"priority"`.
 - Outbound requests carry Codex CLI identity headers (`originator`, paired `User-Agent`, `version`, `session_id`). The version comes from the installed Codex CLI or the npm registry and is clamped to the lowest version the upstream accepts.
+
+Virtual model names use `<model>-<effort>`, `<model>-fast`, or `<model>-<effort>-fast`. API reasoning efforts are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Codex-only modes such as `ultra` and `persistent` are not exposed as API aliases. Explicit `reasoning.effort` and `service_tier` request values take precedence over model-name defaults, and the accepted `service_tier:"fast"` spelling is normalized to the Codex wire value `priority`.
+
+When `--models` is configured, its entries remain an exact offline-capable list. Add any desired virtual names explicitly. Without `--models`, `/v1/models` includes each base model, its advertised effort variants, and Fast combinations only when the Codex catalog advertises Fast support.
 
 To run the live endpoint smoke test against your Codex auth cache:
 

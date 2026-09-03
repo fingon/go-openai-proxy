@@ -51,9 +51,18 @@ type catalogResponse struct {
 	Error  struct {
 		Message string `json:"message"`
 	} `json:"error"`
-	Models []struct {
-		Slug string `json:"slug"`
-	} `json:"models"`
+	Models []catalogModel `json:"models"`
+}
+
+type catalogModel struct {
+	AdditionalSpeedTiers []string `json:"additional_speed_tiers"`
+	ServiceTiers         []struct {
+		ID string `json:"id"`
+	} `json:"service_tiers"`
+	Slug                     string `json:"slug"`
+	SupportedReasoningLevels []struct {
+		Effort string `json:"effort"`
+	} `json:"supported_reasoning_levels"`
 }
 
 type registryResponse struct {
@@ -162,18 +171,66 @@ func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, e
 		return nil, fmt.Errorf("codex returned an invalid models response: %w", err)
 	}
 
-	models := make([]string, 0, len(parsed.Models))
-	for _, model := range parsed.Models {
-		if model.Slug != "" {
-			models = append(models, model.Slug)
-		}
-	}
-	models = uniqueStrings(models)
-	if len(models) == 0 {
+	models, foundModel := catalogModels(parsed.Models, resolver.excludedModels)
+	if !foundModel {
 		return nil, errors.New("codex returned an empty models list")
 	}
 
-	return excludeStrings(models, resolver.excludedModels), nil
+	return models, nil
+}
+
+func catalogModels(catalog []catalogModel, excluded []string) ([]string, bool) {
+	models := make([]string, 0, len(catalog))
+	foundModel := false
+	for _, model := range catalog {
+		model.Slug = strings.TrimSpace(model.Slug)
+		if model.Slug == "" {
+			continue
+		}
+		foundModel = true
+		if containsString(excluded, model.Slug) {
+			continue
+		}
+		models = append(models, modelAliases(model)...)
+	}
+
+	return excludeStrings(uniqueStrings(models), excluded), foundModel
+}
+
+func modelAliases(model catalogModel) []string {
+	efforts := make([]string, 0, len(model.SupportedReasoningLevels))
+	for _, level := range model.SupportedReasoningLevels {
+		effort := strings.ToLower(strings.TrimSpace(level.Effort))
+		if codex.IsAPIReasoningEffort(effort) {
+			efforts = append(efforts, effort)
+		}
+	}
+	efforts = uniqueStrings(efforts)
+
+	aliases := make([]string, 0, 2*(len(efforts)+1))
+	aliases = append(aliases, model.Slug)
+	for _, effort := range efforts {
+		aliases = append(aliases, model.Slug+"-"+effort)
+	}
+	if !modelSupportsFast(model) {
+		return aliases
+	}
+
+	aliases = append(aliases, model.Slug+"-"+codex.FastModelSuffix)
+	for _, effort := range efforts {
+		aliases = append(aliases, model.Slug+"-"+effort+"-"+codex.FastModelSuffix)
+	}
+
+	return aliases
+}
+
+func modelSupportsFast(model catalogModel) bool {
+	for _, tier := range model.ServiceTiers {
+		if tier.ID == codex.PriorityServiceTier {
+			return true
+		}
+	}
+	return containsString(model.AdditionalSpeedTiers, codex.FastModelSuffix)
 }
 
 func (resolver *Resolver) resolveInstalledCodexVersion(ctx context.Context) (string, error) {
@@ -267,6 +324,16 @@ func uniqueStrings(values []string) []string {
 	}
 
 	return result
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+
+	return false
 }
 
 func excludeStrings(values, excluded []string) []string {

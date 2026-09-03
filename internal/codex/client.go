@@ -363,7 +363,7 @@ func NormalizeResponsesPayload(payload map[string]any, options NormalizeOptions)
 	sanitizeResponsesPayload(normalized)
 
 	model, _ := normalized["model"].(string)
-	ApplyEffortAlias(normalized, model)
+	ApplyModelAlias(normalized, model)
 
 	for _, key := range codexOAuthUnsupportedParams {
 		delete(normalized, key)

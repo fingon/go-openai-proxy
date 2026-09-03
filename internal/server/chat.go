@@ -23,6 +23,7 @@ type chatRequest struct {
 	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
 	ReasoningEffort   string             `json:"reasoning_effort,omitempty"`
 	ResponseFormat    any                `json:"response_format,omitempty"`
+	ServiceTier       string             `json:"service_tier,omitempty"`
 	Stop              any                `json:"stop,omitempty"`
 	Stream            bool               `json:"stream,omitempty"`
 	StreamOptions     *chatStreamOptions `json:"stream_options,omitempty"`
@@ -147,6 +148,9 @@ func (chat chatRequest) toResponsesPayload() map[string]any {
 	}
 	if chat.ReasoningEffort != "" {
 		payload["reasoning"] = map[string]any{"effort": chat.ReasoningEffort}
+	}
+	if chat.ServiceTier != "" {
+		payload["service_tier"] = chat.ServiceTier
 	}
 
 	return payload
