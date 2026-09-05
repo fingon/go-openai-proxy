@@ -30,6 +30,8 @@ type Resolver struct {
 	codexVersion       string
 	configuredModels   []string
 	excludedModels     []string
+	excludedEfforts    []string
+	excludedEffortsErr error
 	httpClient         *http.Client
 	modelsCache        []string
 	modelsCacheExpiry  time.Time
@@ -40,10 +42,11 @@ type Resolver struct {
 }
 
 type Options struct {
-	CodexVersion   string
-	ExcludedModels []string
-	HTTPClient     *http.Client
-	Models         []string
+	CodexVersion    string
+	ExcludedEfforts []string
+	ExcludedModels  []string
+	HTTPClient      *http.Client
+	Models          []string
 }
 
 type catalogResponse struct {
@@ -74,17 +77,23 @@ func NewResolver(client *codex.Client, options Options) *Resolver {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	excludedEfforts, excludedEffortsErr := codex.NormalizeReasoningEfforts(options.ExcludedEfforts)
 
 	return &Resolver{
-		client:           client,
-		codexVersion:     strings.TrimSpace(options.CodexVersion),
-		configuredModels: uniqueStrings(options.Models),
-		excludedModels:   uniqueStrings(options.ExcludedModels),
-		httpClient:       httpClient,
+		client:             client,
+		codexVersion:       strings.TrimSpace(options.CodexVersion),
+		configuredModels:   uniqueStrings(options.Models),
+		excludedEfforts:    excludedEfforts,
+		excludedEffortsErr: excludedEffortsErr,
+		excludedModels:     uniqueStrings(options.ExcludedModels),
+		httpClient:         httpClient,
 	}
 }
 
 func (resolver *Resolver) Resolve(ctx context.Context) ([]string, error) {
+	if resolver.excludedEffortsErr != nil {
+		return nil, resolver.excludedEffortsErr
+	}
 	if len(resolver.configuredModels) > 0 {
 		return excludeStrings(resolver.configuredModels, resolver.excludedModels), nil
 	}
@@ -171,7 +180,7 @@ func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, e
 		return nil, fmt.Errorf("codex returned an invalid models response: %w", err)
 	}
 
-	models, foundModel := catalogModels(parsed.Models, resolver.excludedModels)
+	models, foundModel := catalogModels(parsed.Models, resolver.excludedModels, resolver.excludedEfforts)
 	if !foundModel {
 		return nil, errors.New("codex returned an empty models list")
 	}
@@ -179,9 +188,13 @@ func (resolver *Resolver) fetchAvailableModels(ctx context.Context) ([]string, e
 	return models, nil
 }
 
-func catalogModels(catalog []catalogModel, excluded []string) ([]string, bool) {
+func catalogModels(catalog []catalogModel, excluded []string, excludedEfforts ...[]string) ([]string, bool) {
 	models := make([]string, 0, len(catalog))
 	foundModel := false
+	var effortsExcluded []string
+	if len(excludedEfforts) > 0 {
+		effortsExcluded = excludedEfforts[0]
+	}
 	for _, model := range catalog {
 		model.Slug = strings.TrimSpace(model.Slug)
 		if model.Slug == "" {
@@ -191,17 +204,22 @@ func catalogModels(catalog []catalogModel, excluded []string) ([]string, bool) {
 		if containsString(excluded, model.Slug) {
 			continue
 		}
-		models = append(models, modelAliases(model)...)
+		models = append(models, modelAliases(model, effortsExcluded)...)
 	}
 
 	return excludeStrings(uniqueStrings(models), excluded), foundModel
 }
 
-func modelAliases(model catalogModel) []string {
+func modelAliases(model catalogModel, excludedEfforts ...[]string) []string {
+	var effortsExcluded []string
+	if len(excludedEfforts) > 0 {
+		effortsExcluded = excludedEfforts[0]
+	}
+
 	efforts := make([]string, 0, len(model.SupportedReasoningLevels))
 	for _, level := range model.SupportedReasoningLevels {
 		effort := strings.ToLower(strings.TrimSpace(level.Effort))
-		if codex.IsAPIReasoningEffort(effort) {
+		if codex.IsAPIReasoningEffort(effort) && !containsString(effortsExcluded, effort) {
 			efforts = append(efforts, effort)
 		}
 	}

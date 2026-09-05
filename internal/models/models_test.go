@@ -13,6 +13,17 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+const (
+	testBaseLowModel        = "gpt-base-low"
+	testBaseLowHighAlias    = "gpt-base-low-high"
+	testFastFastAlias       = "gpt-fast-fast"
+	testFastModel           = "gpt-fast"
+	testLowEffort           = "low"
+	testStandardMediumAlias = "gpt-standard-medium"
+	testStandardModel       = "gpt-standard"
+	testExplicitLowModel    = "gpt-5-low"
+)
+
 type roundTripFunc func(request *http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -71,7 +82,7 @@ func TestCatalogModelsExpandsSupportedAliases(t *testing.T) {
 		]
 	}`), &response))
 
-	resolved, found := catalogModels(response.Models, []string{"gpt-standard-medium", "gpt-excluded"})
+	resolved, found := catalogModels(response.Models, []string{testStandardMediumAlias, "gpt-excluded"})
 	assert.Assert(t, found)
 	assert.DeepEqual(t, resolved, []string{
 		"gpt-priority",
@@ -80,12 +91,108 @@ func TestCatalogModelsExpandsSupportedAliases(t *testing.T) {
 		"gpt-priority-fast",
 		"gpt-priority-low-fast",
 		"gpt-priority-high-fast",
-		"gpt-standard",
+		testStandardModel,
 		"gpt-legacy",
 		"gpt-legacy-max",
 		"gpt-legacy-fast",
 		"gpt-legacy-max-fast",
 	})
+}
+
+func TestCatalogModelsExcludesEffortAliases(t *testing.T) {
+	const catalog = `{
+		"models":[
+			{
+				"slug":"gpt-fast",
+				"supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],
+				"service_tiers":[{"id":"priority"}]
+			},
+			{
+				"slug":"gpt-standard",
+				"supported_reasoning_levels":[{"effort":"medium"}]
+			},
+			{
+				"slug":"gpt-base-low",
+				"supported_reasoning_levels":[{"effort":"high"}]
+			}
+		]
+	}`
+
+	var response catalogResponse
+	assert.NilError(t, json.Unmarshal([]byte(catalog), &response))
+	for _, testCase := range []struct {
+		name            string
+		excludedEfforts []string
+		excludedModels  []string
+		want            []string
+	}{
+		{
+			name: "no exclusions",
+			want: []string{
+				testFastModel,
+				"gpt-fast-" + testLowEffort,
+				"gpt-fast-high",
+				testFastFastAlias,
+				"gpt-fast-" + testLowEffort + "-fast",
+				"gpt-fast-high-fast",
+				testStandardModel,
+				testStandardMediumAlias,
+				testBaseLowModel,
+				testBaseLowHighAlias,
+			},
+		},
+		{
+			name:            "individual effort with fast support",
+			excludedEfforts: []string{testLowEffort},
+			want: []string{
+				testFastModel,
+				"gpt-fast-high",
+				testFastFastAlias,
+				"gpt-fast-high-fast",
+				testStandardModel,
+				testStandardMediumAlias,
+				testBaseLowModel,
+				testBaseLowHighAlias,
+			},
+		},
+		{
+			name:            "all API efforts",
+			excludedEfforts: []string{"none", "minimal", testLowEffort, "medium", "high", "xhigh", "max"},
+			want: []string{
+				testFastModel,
+				testFastFastAlias,
+				testStandardModel,
+				testBaseLowModel,
+			},
+		},
+		{
+			name:            "base family and exact alias exclusions",
+			excludedEfforts: []string{testLowEffort},
+			excludedModels:  []string{testFastModel, testStandardMediumAlias},
+			want: []string{
+				testStandardModel,
+				testBaseLowModel,
+				testBaseLowHighAlias,
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resolved, found := catalogModels(response.Models, testCase.excludedModels, testCase.excludedEfforts)
+			assert.Assert(t, found)
+			assert.DeepEqual(t, resolved, testCase.want)
+		})
+	}
+}
+
+func TestResolveExplicitModelsIgnoresEffortExclusions(t *testing.T) {
+	resolver := NewResolver(nil, Options{
+		ExcludedEfforts: []string{" LOW ", testLowEffort},
+		Models:          []string{testExplicitLowModel, "gpt-5", testExplicitLowModel, "gpt-5-high"},
+	})
+
+	resolved, err := resolver.Resolve(context.Background())
+	assert.NilError(t, err)
+	assert.DeepEqual(t, resolved, []string{testExplicitLowModel, "gpt-5", "gpt-5-high"})
 }
 
 func TestCatalogModelsReportsWhetherCatalogContainsModels(t *testing.T) {

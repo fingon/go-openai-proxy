@@ -2,7 +2,7 @@
 
 ## Effort alias exclusions
 
-- [ ] Implement the [planned effort alias exclusion design](DESIGN.md#planned-effort-alias-exclusions).
+- [x] Implement the effort alias exclusion design described in DESIGN.md.
   - Add `--exclude-efforts` / `GO_OPENAI_PROXY_EXCLUDE_EFFORTS` to server
     configuration and carry the list into resolver options. Default to no
     exclusions. Trim, lowercase, discard empty entries, and deduplicate; reject

@@ -28,9 +28,13 @@ type recordingTransport struct {
 }
 
 func (transport *recordingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	bodyBytes, err := io.ReadAll(request.Body)
-	if err != nil {
-		return nil, err
+	var bodyBytes []byte
+	if request.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
 	transport.requests = append(transport.requests, request)
 	transport.bodies = append(transport.bodies, string(bodyBytes))
@@ -63,6 +67,106 @@ func TestModelRetrieve(t *testing.T) {
 	missing := httptest.NewRecorder()
 	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/v1/models/not-real", nil))
 	assert.Equal(t, missing.Code, http.StatusNotFound)
+}
+
+func TestExcludedEffortsAffectModelListAndLookup(t *testing.T) {
+	transport := &recordingTransport{}
+	transport.handler = func(request *http.Request, _ string) (*http.Response, error) {
+		assert.Equal(t, request.URL.Path, "/backend-api/codex/models")
+		return jsonResponse(http.StatusOK, map[string]any{
+			"models": []any{map[string]any{
+				"slug":                       "gpt-5.4",
+				"supported_reasoning_levels": []any{map[string]any{"effort": "low"}, map[string]any{"effort": "high"}},
+				"service_tiers":              []any{map[string]any{"id": "priority"}},
+			}},
+		}), nil
+	}
+	handler := testHandlerWithOptions(t, transport, Options{
+		CodexVersion:    "1.2.3",
+		ExcludedEfforts: []string{" low "},
+	})
+
+	list := httptest.NewRecorder()
+	handler.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	assert.Equal(t, list.Code, http.StatusOK)
+
+	var listPayload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	assert.NilError(t, json.Unmarshal(list.Body.Bytes(), &listPayload))
+	ids := make([]string, 0, len(listPayload.Data))
+	for _, model := range listPayload.Data {
+		ids = append(ids, model.ID)
+	}
+	assert.DeepEqual(t, ids, []string{
+		"gpt-5.4",
+		"gpt-5.4-high",
+		"gpt-5.4-fast",
+		"gpt-5.4-high-fast",
+	})
+
+	for _, testCase := range []struct {
+		model string
+		code  int
+	}{
+		{model: "gpt-5.4-high", code: http.StatusOK},
+		{model: "gpt-5.4-low", code: http.StatusNotFound},
+	} {
+		t.Run(testCase.model, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/models/"+testCase.model, nil))
+			assert.Equal(t, response.Code, testCase.code)
+		})
+	}
+}
+
+func TestInferenceKeepsHiddenAliasesAndExplicitEfforts(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "responses",
+			path: "/v1/responses",
+			body: `{"model":"gpt-5.4-high","reasoning":{"effort":"low"},"input":[]}`,
+		},
+		{
+			name: "chat completions",
+			path: "/v1/chat/completions",
+			body: `{"model":"gpt-5.4-high","reasoning_effort":"low","messages":[]}`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var upstreamBody string
+			transport := &recordingTransport{}
+			transport.handler = func(_ *http.Request, body string) (*http.Response, error) {
+				upstreamBody = body
+				return textResponse(http.StatusOK, strings.Join([]string{
+					testEventResponseCompleted,
+					testEmptyCompletedResponseData,
+					"",
+				}, "\n")), nil
+			}
+			handler := testHandlerWithOptions(t, transport, Options{
+				ExcludedEfforts: []string{"high"},
+			})
+
+			request := httptestPostJSON(testCase.path, testCase.body)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			assert.Equal(t, response.Code, http.StatusOK)
+			var payload map[string]any
+			assert.NilError(t, json.Unmarshal([]byte(upstreamBody), &payload))
+			assert.Equal(t, payload["model"], "gpt-5.4")
+			reasoning, ok := payload["reasoning"].(map[string]any)
+			assert.Assert(t, ok)
+			assert.Equal(t, reasoning["effort"], "low")
+		})
+	}
 }
 
 func TestResponsesAggregatesSSE(t *testing.T) {
@@ -146,6 +250,10 @@ func TestUnsupportedV1RouteDoesNotPassthrough(t *testing.T) {
 }
 
 func testHandler(t *testing.T, transport *recordingTransport, configuredModels []string) *Handler {
+	return testHandlerWithOptions(t, transport, Options{Models: configuredModels})
+}
+
+func testHandlerWithOptions(t *testing.T, transport *recordingTransport, options Options) *Handler {
 	t.Helper()
 	if transport == nil {
 		transport = &recordingTransport{handler: func(_ *http.Request, _ string) (*http.Response, error) {
@@ -157,12 +265,10 @@ func testHandler(t *testing.T, transport *recordingTransport, configuredModels [
 	assert.NilError(t, err)
 	assert.NilError(t, os.WriteFile(authPath, content, 0o600))
 
-	handler, err := NewHandler(Options{
-		AuthFilePath: authPath,
-		BaseURL:      "https://chatgpt.com/backend-api/codex",
-		HTTPClient:   &http.Client{Transport: transport},
-		Models:       configuredModels,
-	})
+	options.AuthFilePath = authPath
+	options.BaseURL = "https://chatgpt.com/backend-api/codex"
+	options.HTTPClient = &http.Client{Transport: transport}
+	handler, err := NewHandler(options)
 	assert.NilError(t, err)
 
 	return handler

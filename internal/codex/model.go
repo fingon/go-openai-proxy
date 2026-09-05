@@ -1,11 +1,16 @@
 package codex
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	FastModelSuffix     = "fast"
 	PriorityServiceTier = "priority"
 )
+
+var apiReasoningEfforts = [...]string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 type ModelAlias struct {
 	Model  string
@@ -14,12 +19,34 @@ type ModelAlias struct {
 }
 
 func IsAPIReasoningEffort(effort string) bool {
-	switch effort {
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
-		return true
-	default:
-		return false
+	for _, supported := range apiReasoningEfforts {
+		if effort == supported {
+			return true
+		}
 	}
+
+	return false
+}
+
+func NormalizeReasoningEfforts(values []string) ([]string, error) {
+	var normalized []string
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		effort := strings.ToLower(strings.TrimSpace(value))
+		if effort == "" {
+			continue
+		}
+		if !IsAPIReasoningEffort(effort) {
+			return nil, fmt.Errorf("invalid reasoning effort %q; valid choices: %s", effort, strings.Join(apiReasoningEfforts[:], ", "))
+		}
+		if _, exists := seen[effort]; exists {
+			continue
+		}
+		seen[effort] = struct{}{}
+		normalized = append(normalized, effort)
+	}
+
+	return normalized, nil
 }
 
 func ParseModelAlias(model string) ModelAlias {

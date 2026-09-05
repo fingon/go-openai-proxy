@@ -4,8 +4,7 @@ go-openai-proxy exposes a local subset of the OpenAI HTTP API using credentials
 from a ChatGPT/Codex OAuth cache. Both inference endpoints call the Codex
 Responses endpoint. The proxy adapts requests and responses; it does not run
 models, execute tools, or store conversations. This document describes the
-current implementation, including its compatibility limits. Explicitly marked
-planned features describe agreed designs awaiting implementation in TODO.md.
+current implementation, including its compatibility limits.
 
 ## Architecture
 
@@ -243,10 +242,11 @@ Configured model entries are trimmed, deduplicated, and filtered by exact
 exclusions without a catalog request or automatic alias expansion. Otherwise,
 the resolver requests `/models?client_version=...` using account credentials.
 Each nonblank catalog slug contributes its base name and advertised API effort
-variants. Fast and effort/Fast combinations appear only when the catalog
-advertises a priority service tier or additional Fast speed tier. Excluding a
-base slug removes its entire generated family; exact aliases can also be
-excluded. The CLI excludes `codex-auto-review` by default.
+variants, except for efforts listed in `--exclude-efforts`. Fast and
+effort/Fast combinations appear only when the catalog advertises a priority
+service tier or additional Fast speed tier. Excluding a base slug removes its
+entire generated family; exact aliases can also be excluded. The CLI excludes
+`codex-auto-review` by default.
 
 Nonempty discovered lists are cached for five minutes. Failed refreshes return
 errors rather than serving stale lists. A catalog without any usable slug is
@@ -259,12 +259,9 @@ not a registry fallback. Discovered versions are cached for one hour. The
 catalog query uses this resolved version directly; the minimum-version clamp
 applies separately to identity headers.
 
-### Planned: effort alias exclusions
+### Effort alias exclusions
 
-This feature is not implemented yet; implementation is tracked in
-[TODO.md](TODO.md#effort-alias-exclusions).
-
-`--exclude-efforts` and `GO_OPENAI_PROXY_EXCLUDE_EFFORTS` will accept a
+`--exclude-efforts` and `GO_OPENAI_PROXY_EXCLUDE_EFFORTS` accept a
 comma-separated list of API reasoning efforts, with an empty default so existing
 discovery behavior is preserved. Valid values are `none`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, and `max`. Configuration processing trims whitespace,

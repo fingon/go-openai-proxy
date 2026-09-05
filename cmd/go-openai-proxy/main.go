@@ -73,6 +73,10 @@ func run() int {
 }
 
 func startupModels(ctx context.Context, options server.Options) ([]string, error) {
+	if err := options.Validate(); err != nil {
+		return nil, err
+	}
+
 	codexClient, err := codex.NewClient(codex.Options{
 		AuthFilePath: options.AuthFilePath,
 		BaseURL:      options.BaseURL,
@@ -87,10 +91,11 @@ func startupModels(ctx context.Context, options server.Options) ([]string, error
 	}
 
 	resolver := models.NewResolver(codexClient, models.Options{
-		CodexVersion:   options.CodexVersion,
-		ExcludedModels: options.ExcludedModels,
-		HTTPClient:     options.HTTPClient,
-		Models:         options.Models,
+		CodexVersion:    options.CodexVersion,
+		ExcludedEfforts: options.ExcludedEfforts,
+		ExcludedModels:  options.ExcludedModels,
+		HTTPClient:      options.HTTPClient,
+		Models:          options.Models,
 	})
 
 	return resolver.Resolve(ctx)

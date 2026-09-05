@@ -13,6 +13,7 @@ const (
 	testCodexModel             = "gpt-5.3-codex"
 	testGPT54Model             = "gpt-5.4"
 	testHighEffort             = "high"
+	testLowEffort              = "low"
 	testMinimumIdentityVersion = "0.144.0"
 )
 
@@ -80,6 +81,38 @@ func TestNormalizeResponsesPayload(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			golden.Assert(t, normalizeToJSON(t, testCase.payload), testCase.name+".golden")
+		})
+	}
+}
+
+func TestNormalizeReasoningEfforts(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		input     []string
+		want      []string
+		wantError string
+	}{
+		{name: "empty", want: nil},
+		{
+			name:  "normalizes and deduplicates",
+			input: []string{" HIGH ", testLowEffort, "", "high", " LOW "},
+			want:  []string{"high", testLowEffort},
+		},
+		{
+			name:      "rejects unknown effort",
+			input:     []string{"medium", "unlimited"},
+			wantError: `invalid reasoning effort "unlimited"; valid choices: none, minimal, low, medium, high, xhigh, max`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := NormalizeReasoningEfforts(testCase.input)
+			if testCase.wantError != "" {
+				assert.ErrorContains(t, err, testCase.wantError)
+				return
+			}
+
+			assert.NilError(t, err)
+			assert.DeepEqual(t, got, testCase.want)
 		})
 	}
 }

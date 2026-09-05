@@ -26,6 +26,7 @@ codex login
 | Port | `--port` | `GO_OPENAI_PROXY_PORT` | `17132` |
 | Model allowlist | `--models` | `GO_OPENAI_PROXY_MODELS` | Account-specific Codex models |
 | Model exclusions | `--exclude-models` | `GO_OPENAI_PROXY_EXCLUDE_MODELS` | `codex-auto-review` |
+| Effort alias exclusions | `--exclude-efforts` | `GO_OPENAI_PROXY_EXCLUDE_EFFORTS` | none |
 | Codex API version | `--codex-version` | `GO_OPENAI_PROXY_CODEX_VERSION` | Installed `codex --version`, then registry latest |
 | Upstream base URL | `--base-url` | `GO_OPENAI_PROXY_BASE_URL` | `https://chatgpt.com/backend-api/codex` |
 | OAuth client id | `--oauth-client-id` | `GO_OPENAI_PROXY_OAUTH_CLIENT_ID` | `app_EMoamEEZ73f0CkXaXp7hrann` |
@@ -100,12 +101,12 @@ The ChatGPT OAuth codex endpoint is stricter than the public Responses API, so b
 - Shared normalization drops `chat_template_kwargs`, `frequency_penalty`, `max_completion_tokens`, `max_output_tokens`, `metadata`, `presence_penalty`, `prompt_cache_retention`, `safety_identifier`, `stop`, `stop_sequences`, `stream_options`, `temperature`, `top_p`, `truncation`, and `user`. The Chat adapter also discards `max_tokens`; raw Responses requests retain it.
 - String `input` values become message arrays; `role:"tool"` rows become `function_call_output` items; legacy Chat Completions `functions`/`function_call` map to `tools`/`tool_choice`.
 - Function/tool call ids are normalized to the upstream-required `fc_` prefix; replayed `reasoning` items lose their server-side ids and get an empty `summary` when missing or null, while `reasoning.encrypted_content` is requested so multi-turn reasoning context survives with `store=false`.
-- Automatically discovered models include virtual effort and Fast variants based on the capabilities advertised by Codex. For example, `gpt-5.4-high-fast` forwards `model:"gpt-5.4"`, `reasoning.effort:"high"`, and `service_tier:"priority"`.
+- Automatically discovered models include virtual effort and Fast variants based on the capabilities advertised by Codex. Use `--exclude-efforts` or `GO_OPENAI_PROXY_EXCLUDE_EFFORTS` to hide selected generated effort aliases; values are trimmed, lowercased, deduplicated, and validated at startup. Base models and supported plain Fast aliases remain available, and explicit `--models` entries are unaffected. For example, `gpt-5.4-high-fast` forwards `model:"gpt-5.4"`, `reasoning.effort:"high"`, and `service_tier:"priority"`.
 - Outbound requests carry Codex CLI identity headers (`originator`, paired `User-Agent`, `version`, `session_id`). The version uses an explicit override, the installed Codex CLI, or the npm registry, with a compiled fallback and minimum for identity headers.
 
 Virtual model names use `<model>-<effort>`, `<model>-fast`, or `<model>-<effort>-fast`. API reasoning efforts are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Codex-only modes such as `ultra` and `persistent` are not exposed as API aliases. Explicit `reasoning.effort` and `service_tier` request values take precedence over model-name defaults, and the accepted `service_tier:"fast"` spelling is normalized to the Codex wire value `priority`.
 
-When `--models` is configured, its entries form an offline-capable list after trimming, deduplication, and exclusions. Add any desired virtual names explicitly. The list controls model discovery, not which models inference requests may use. Without `--models`, `/v1/models` includes each base model, its advertised effort variants, and Fast combinations only when the Codex catalog advertises Fast support.
+When `--models` is configured, its entries form an offline-capable list after trimming, deduplication, and exclusions. Add any desired virtual names explicitly. The list controls model discovery, not which models inference requests may use. Without `--models`, `/v1/models` includes each base model, its advertised effort variants, and Fast combinations only when the Codex catalog advertises Fast support, subject to `--exclude-efforts`. Excluding an effort also removes its Fast combination, but does not change inference alias parsing or explicit request effort values.
 
 To run the live endpoint smoke test against your Codex auth cache:
 
