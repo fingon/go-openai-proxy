@@ -4,7 +4,8 @@ go-openai-proxy exposes a local subset of the OpenAI HTTP API using credentials
 from a ChatGPT/Codex OAuth cache. Both inference endpoints call the Codex
 Responses endpoint. The proxy adapts requests and responses; it does not run
 models, execute tools, or store conversations. This document describes the
-current implementation, including its compatibility limits.
+current implementation, including its compatibility limits. Explicitly marked
+planned features describe agreed designs awaiting implementation in TODO.md.
 
 ## Architecture
 
@@ -257,6 +258,42 @@ executable is absent. A failing executable or unparseable version is an error,
 not a registry fallback. Discovered versions are cached for one hour. The
 catalog query uses this resolved version directly; the minimum-version clamp
 applies separately to identity headers.
+
+### Planned: effort alias exclusions
+
+This feature is not implemented yet; implementation is tracked in
+[TODO.md](TODO.md#effort-alias-exclusions).
+
+`--exclude-efforts` and `GO_OPENAI_PROXY_EXCLUDE_EFFORTS` will accept a
+comma-separated list of API reasoning efforts, with an empty default so existing
+discovery behavior is preserved. Valid values are `none`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, and `max`. Configuration processing trims whitespace,
+normalizes values to lowercase, ignores empty entries, and deduplicates values.
+Unknown values cause a startup error identifying the invalid value and listing
+the valid choices.
+
+The exclusion applies only to automatic alias generation from catalog effort
+metadata. Excluding `low` suppresses both `<model>-low` and
+`<model>-low-fast` across all discovered models. Base models and
+capability-supported `<model>-fast` aliases remain available; excluding every
+effort leaves those entries. Filtering preserves the existing ordering and
+deduplication of retained entries and does not infer effort from base slug
+suffixes.
+
+Explicit `--models` entries are unaffected by effort exclusions and remain
+subject to existing exact model exclusions. Existing `--exclude-models` behavior
+also remains: excluding a catalog base removes its generated family, while an
+exact alias exclusion removes only that entry.
+
+For example, `--exclude-efforts=none,minimal,low,medium` suppresses those effort
+aliases and their Fast combinations, retaining advertised `high`, `xhigh`, and
+`max` variants alongside base models and supported plain Fast aliases.
+
+Both the startup resolver and HTTP-handler resolver use the same exclusion
+configuration. The resulting list controls startup output, `GET /v1/models`,
+and `GET /v1/models/{model}`; lookup of a suppressed alias returns 404 unless it
+is explicitly included through `--models`. Inference alias parsing and explicit
+request effort values remain available regardless of discovery exclusions.
 
 ## Deployment and verification
 
