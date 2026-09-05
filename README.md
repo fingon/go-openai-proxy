@@ -2,6 +2,8 @@
 
 OpenAI-compatible local endpoint backed by the local ChatGPT/Codex OAuth cache.
 
+See [DESIGN.md](DESIGN.md) for architecture and implementation details.
+
 ## Usage
 
 ```bash
@@ -30,7 +32,7 @@ codex login
 | OAuth token URL | `--oauth-token-url` | `GO_OPENAI_PROXY_OAUTH_TOKEN_URL` | `https://auth.openai.com/oauth/token` |
 | Auth file path | `--oauth-file` | `GO_OPENAI_PROXY_OAUTH_FILE` | `$CHATGPT_LOCAL_HOME/auth.json`, `$CODEX_HOME/auth.json`, `~/.chatgpt-local/auth.json`, `~/.codex/auth.json` |
 | Disable OAuth refresh | `--no-refresh` | `GO_OPENAI_PROXY_NO_REFRESH` | disabled |
-| Verbose logging | `-v`, `--verbose` | `GO_OPENAI_PROXY_VERBOSE` | disabled |
+| Verbose logging | `-v`, `--v` | `GO_OPENAI_PROXY_VERBOSE` | disabled |
 
 ## Container
 
@@ -95,15 +97,15 @@ The Responses adapter always sends a streaming request to Codex and aggregates t
 The ChatGPT OAuth codex endpoint is stricter than the public Responses API, so both endpoints normalize requests before forwarding:
 
 - `role:"system"` and `role:"developer"` messages in `input` (and Chat Completions `messages`) are promoted into the top-level `instructions` field; text-only entries are removed from `input`, mixed-content entries are kept as `developer` messages.
-- Parameters rejected by the OAuth endpoint are dropped: `temperature`, `top_p`, `stop`, `frequency_penalty`, `presence_penalty`, `max_tokens`, `max_completion_tokens`, `max_output_tokens`, `user`, `metadata`, `stream_options`, `truncation`, `safety_identifier`.
+- Shared normalization drops `chat_template_kwargs`, `frequency_penalty`, `max_completion_tokens`, `max_output_tokens`, `metadata`, `presence_penalty`, `prompt_cache_retention`, `safety_identifier`, `stop`, `stop_sequences`, `stream_options`, `temperature`, `top_p`, `truncation`, and `user`. The Chat adapter also discards `max_tokens`; raw Responses requests retain it.
 - String `input` values become message arrays; `role:"tool"` rows become `function_call_output` items; legacy Chat Completions `functions`/`function_call` map to `tools`/`tool_choice`.
-- Function/tool call ids are normalized to the upstream-required `fc_` prefix; replayed `reasoning` items lose their server-side ids and get a required empty `summary`, while `reasoning.encrypted_content` is requested so multi-turn reasoning context survives with `store=false`.
+- Function/tool call ids are normalized to the upstream-required `fc_` prefix; replayed `reasoning` items lose their server-side ids and get an empty `summary` when missing or null, while `reasoning.encrypted_content` is requested so multi-turn reasoning context survives with `store=false`.
 - Automatically discovered models include virtual effort and Fast variants based on the capabilities advertised by Codex. For example, `gpt-5.4-high-fast` forwards `model:"gpt-5.4"`, `reasoning.effort:"high"`, and `service_tier:"priority"`.
-- Outbound requests carry Codex CLI identity headers (`originator`, paired `User-Agent`, `version`, `session_id`). The version comes from the installed Codex CLI or the npm registry and is clamped to the lowest version the upstream accepts.
+- Outbound requests carry Codex CLI identity headers (`originator`, paired `User-Agent`, `version`, `session_id`). The version uses an explicit override, the installed Codex CLI, or the npm registry, with a compiled fallback and minimum for identity headers.
 
 Virtual model names use `<model>-<effort>`, `<model>-fast`, or `<model>-<effort>-fast`. API reasoning efforts are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Codex-only modes such as `ultra` and `persistent` are not exposed as API aliases. Explicit `reasoning.effort` and `service_tier` request values take precedence over model-name defaults, and the accepted `service_tier:"fast"` spelling is normalized to the Codex wire value `priority`.
 
-When `--models` is configured, its entries remain an exact offline-capable list. Add any desired virtual names explicitly. Without `--models`, `/v1/models` includes each base model, its advertised effort variants, and Fast combinations only when the Codex catalog advertises Fast support.
+When `--models` is configured, its entries form an offline-capable list after trimming, deduplication, and exclusions. Add any desired virtual names explicitly. The list controls model discovery, not which models inference requests may use. Without `--models`, `/v1/models` includes each base model, its advertised effort variants, and Fast combinations only when the Codex catalog advertises Fast support.
 
 To run the live endpoint smoke test against your Codex auth cache:
 
